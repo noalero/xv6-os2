@@ -678,3 +678,78 @@ procdump(void)
     printf("\n");
   }
 }
+
+void
+addlink_list(int *first_link, int new_link_pid){
+  int new_proc_loc;
+  struct proc *p;
+
+  // Find the <new_link> location in <proc[]> array
+  for(p = proc; p < &proc[NPROC]; p++) {
+    if(p->pid == new_link_pid){
+      new_proc_loc = p - proc;
+      break;
+    }
+  }
+
+  int curr_link;
+  int next_link;
+
+  if(cas(first_link, -1, new_proc_loc)){// Empty list
+    curr_link = (proc + *first_link)->next_proc;
+    cas(&((proc + *first_link)->next_proc), curr_link, -1); // Set last linl <next_proc> to -1
+  }
+  else{
+    // Find the last link
+    curr_link = first_link; // Will hold the location of the current link in <proc[]> array
+    do {
+      next_link = curr_link;
+    } while (((proc + next_link)->next_proc >= 0) && cas(&curr_link, next_link, (proc + next_link)->next_proc)) ;
+    if ((proc + next_link)->next_proc == -1){
+      cas((proc + next_link)->next_proc, -1, new_proc_loc); // Set last linl <next_proc> to -1 
+    }
+  } 
+}
+
+void
+addlink_cpu(int new_link_pid){
+  int new_proc_loc;
+  struct proc *p;
+  // Find the <new_link> location in <proc[]> array
+  for(p = proc; p < &proc[NPROC]; p++) {
+    if(p->pid == new_link_pid){
+      new_proc_loc = p - proc;
+      break;
+    }
+  }
+
+  push_off();
+  int c_id = cpuid();
+  struct cpu* c = mycpu();
+  pop_off();
+
+  int curr_link;
+  int next_link;
+  int cpu_num;
+
+  if(cas(&(c->first_runnable_proc), -1, new_proc_loc)){// Empty list
+    curr_link = (proc + c->first_runnable_proc)->next_proc;
+    cpu_num = (proc + c->first_runnable_proc)->cpu_num;
+    cas(&((proc + c->first_runnable_proc)->next_proc), curr_link, -1); // Set last link <next_prok> to -1
+    cas(&((proc + c->first_runnable_proc)->cpu_num), cpu_num, c_id); // Set <cpu_num>
+  }
+  else{
+    // Find the last link
+    curr_link = c->first_runnable_proc; // Will hold the location of the current link in <proc[]> array  
+    do {
+      next_link = curr_link;
+    } while (((proc + next_link)->next_proc >= 0) && cas(&curr_link, next_link, (proc + next_link)->next_proc)) ;
+    if ((proc + next_link)->next_proc == -1){
+       cpu_num = (proc + next_link)->cpu_num;
+      cas((proc + next_link)->next_proc, -1, new_proc_loc); // Set last linl <next_proc> to -1
+      cas(&((proc + next_link)->cpu_num), cpu_num, c_id); // Set <cpu_num>
+    }
+  }
+
+
+}
