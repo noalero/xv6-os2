@@ -679,8 +679,9 @@ procdump(void)
   }
 }
 
+// TODO: add validity checks, change return val type to int, it will indicate if the function was successful
 void
-addlink_list(int *first_link, int new_link_pid){
+add_link_list(int *first_link, int new_link_pid){
   int new_proc_loc;
   struct proc *p;
 
@@ -701,7 +702,7 @@ addlink_list(int *first_link, int new_link_pid){
   }
   else{
     // Find the last link
-    curr_link = first_link; // Will hold the location of the current link in <proc[]> array
+    curr_link = *first_link; // Will hold the location of the current link in <proc[]> array
     do {
       next_link = curr_link;
     } while (((proc + next_link)->next_proc >= 0) && cas(&curr_link, next_link, (proc + next_link)->next_proc)) ;
@@ -712,7 +713,7 @@ addlink_list(int *first_link, int new_link_pid){
 }
 
 void
-addlink_cpu(int new_link_pid){
+add_link_cpu(int new_link_pid){
   int new_proc_loc;
   struct proc *p;
   // Find the <new_link> location in <proc[]> array
@@ -750,6 +751,58 @@ addlink_cpu(int new_link_pid){
       cas(&((proc + next_link)->cpu_num), cpu_num, c_id); // Set <cpu_num>
     }
   }
+}
 
+void
+remove_link_list(int *first_link, int pid_to_remove){
+  int prev_link_l;
+  int next_link_l;
+  int curr_link = *first_link;
+  struct proc *p;
 
+  if((proc + *first_link)->pid == pid_to_remove){ // Only one linke in list
+    do {
+      next_link_l = curr_link;
+    } while (cas(first_link, next_link_l, -1));
+  }
+
+  else{
+    do {
+      prev_link_l = curr_link;
+    } while (cas(&curr_link, prev_link_l, (proc + prev_link_l)->next_proc) && (proc + curr_link)->pid != pid_to_remove);
+    // <prev_link_l> holds the location of the link "pointing" at <pid_to_remove>
+    // <curr_link> holds the location of <pid_to_remove>
+    next_link_l = (proc + curr_link)->next_proc; // Holds the location of the link <pid_to_remove> "points" at.
+    cas(&((proc + prev_link_l)->next_proc), curr_link, next_link_l); // Set the next link <prev_link_l> "points" at to <next_link_l>
+  }
+}
+
+void
+remove_link_cpu(int pid_to_remove){
+
+  push_off();
+  int c_id = cpuid();
+  struct cpu* c = mycpu();
+  pop_off();
+
+  int prev_link_l;
+  int next_link_l;
+  int curr_link = c->first_runnable_proc;
+  struct proc *p;
+
+  if((proc + curr_link)->pid == pid_to_remove){ // Only one linke in list
+    do {
+      next_link_l = curr_link;
+    } while (cas(&(c->first_runnable_proc), next_link_l, -1));
+  }
+  
+  else{
+    do {
+      prev_link_l = curr_link;
+    } while (cas(&curr_link, prev_link_l, (proc + prev_link_l)->next_proc) && (proc + curr_link)->pid != pid_to_remove);
+    // <prev_link_l> holds the location of the link "pointing" at <pid_to_remove>
+    // <curr_link> holds the location of <pid_to_remove>
+    next_link_l = (proc + curr_link)->next_proc; // Holds the location of the link <pid_to_remove> "points" at.
+    cas(&((proc + prev_link_l)->next_proc), curr_link, next_link_l); // Set the next link <prev_link_l> "points" at to <next_link_l>
+  }
 }
