@@ -29,12 +29,12 @@ struct spinlock wait_lock;
 extern uint64 cas(volatile void *addr, int expected, int newval);
 
 /*
-  Process: Each process will have a field: <next_proc> that will hold the location (in proc[] array) of the next process of it's current list.
+  Process: Each process will have a field: <next_proc> that will hold the index (in proc[] array) of the next process of it's current list.
            (The value of the field will be between (0 - NPROC), or -1 if this process is the last one in the list).
-  CPU: Each CPU will have a field <first_runnable_proc> that will hold the location (in proc[] array) of the first process of it's Runnable list.
+  CPU: Each CPU will have a field <first_runnable_proc> that will hold the index (in proc[] array) of the first process of it's Runnable list.
        If the list is empty <first_runnable_proc> will be set to -1.
   States lists: Three global variables: <sleeping_list>, <zombie_list>, <unused_list> 
-                Each variable will hold the location (in proc[] array) of the first process/ entry in the respective list.
+                Each variable will hold the index (in proc[] array) of the first process/ entry in the respective list.
                 If the list is empty, the value of the global variable will be -1.
   ## All of the above fields and global variables will be initialized to -1.
 */
@@ -680,129 +680,72 @@ procdump(void)
 }
 
 // TODO: add validity checks, change return val type to int, it will indicate if the function was successful
-void
-add_link_list(int *first_link, int new_link_pid){
-  int new_proc_loc;
-  struct proc *p;
+//TODO: make it generic
 
-  // Find the <new_link> location in <proc[]> array
-  for(p = proc; p < &proc[NPROC]; p++) {
-    if(p->pid == new_link_pid){
-      new_proc_loc = p - proc;
-      break;
-    }
-  }
-
+int
+add_link(int *first_link, int new_link_pid){
+  /*If the list is a CPU's RUNNABLE list, <first_link> is a pointer to <c->first_runnable_proc>*/
+  /*If the list is a global variable, <first_link> is a pointer to <state_list>*/
+  int new_proc_index = -1;
+  struct  proc *p;
   int curr_link;
   int next_link;
 
-  if(cas(first_link, -1, new_proc_loc)){// Empty list
+  
+  // Find the <new_link> index in <proc[]> array
+  for(p = proc; p < &proc[NPROC]; p++) {
+    if(p->pid == new_link_pid){
+      new_proc_index = p - proc;
+      break;
+    }
+  }
+  if (new_proc_index == -1 || new_proc_index > NPROC){ // Didn't find process with <new_link_pid> || Imposible index
+    return -1;
+  }
+
+  // Empty list
+  if(cas(first_link, -1, new_proc_index)){ // Set the pointer to the new first link index
     curr_link = (proc + *first_link)->next_proc;
-    cas(&((proc + *first_link)->next_proc), curr_link, -1); // Set last linl <next_proc> to -1
+    return cas(&((proc + *first_link)->next_proc), curr_link, -1); // Set last link <next_proc> to -1
   }
   else{
     // Find the last link
-    curr_link = *first_link; // Will hold the location of the current link in <proc[]> array
+    curr_link = *first_link; // Will hold the index in <proc[]> array of the current link
     do {
       next_link = curr_link;
     } while (((proc + next_link)->next_proc >= 0) && cas(&curr_link, next_link, (proc + next_link)->next_proc)) ;
-    if ((proc + next_link)->next_proc == -1){
-      cas((proc + next_link)->next_proc, -1, new_proc_loc); // Set last linl <next_proc> to -1 
+    // <curr_lonk> holds the last link
+
+    if (cas(&((proc + next_link)->next_proc), -1, new_proc_index)){ // Set last link <next_proc> to <new_proc_index>
+      curr_link = (proc + new_proc_index)->next_proc;
+      return cas(&((proc + new_proc_index)->next_proc), curr_link, -1); // Set last link <next_proc> to -1
     }
-  } 
-}
-
-void
-add_link_cpu(int new_link_pid){
-  int new_proc_loc;
-  struct proc *p;
-  // Find the <new_link> location in <proc[]> array
-  for(p = proc; p < &proc[NPROC]; p++) {
-    if(p->pid == new_link_pid){
-      new_proc_loc = p - proc;
-      break;
-    }
-  }
-
-  push_off();
-  int c_id = cpuid();
-  struct cpu* c = mycpu();
-  pop_off();
-
-  int curr_link;
-  int next_link;
-  int cpu_num;
-
-  if(cas(&(c->first_runnable_proc), -1, new_proc_loc)){// Empty list
-    curr_link = (proc + c->first_runnable_proc)->next_proc;
-    cpu_num = (proc + c->first_runnable_proc)->cpu_num;
-    cas(&((proc + c->first_runnable_proc)->next_proc), curr_link, -1); // Set last link <next_prok> to -1
-    cas(&((proc + c->first_runnable_proc)->cpu_num), cpu_num, c_id); // Set <cpu_num>
-  }
-  else{
-    // Find the last link
-    curr_link = c->first_runnable_proc; // Will hold the location of the current link in <proc[]> array  
-    do {
-      next_link = curr_link;
-    } while (((proc + next_link)->next_proc >= 0) && cas(&curr_link, next_link, (proc + next_link)->next_proc)) ;
-    if ((proc + next_link)->next_proc == -1){
-       cpu_num = (proc + next_link)->cpu_num;
-      cas((proc + next_link)->next_proc, -1, new_proc_loc); // Set last linl <next_proc> to -1
-      cas(&((proc + next_link)->cpu_num), cpu_num, c_id); // Set <cpu_num>
-    }
+    return -1;
   }
 }
 
-void
-remove_link_list(int *first_link, int pid_to_remove){
-  int prev_link_l;
-  int next_link_l;
+
+int
+remove_link(int *first_link, int pid_to_remove){
+
   int curr_link = *first_link;
-  struct proc *p;
+  int prev_link;
+  int next_link;
+
+  // TODO: Chek if return value of a list that doesn't contain <pid_to_remove> should be 0 / -1
+  if (*first_link == -1) { // Empty list
+    return -1;
+  }
 
   if((proc + *first_link)->pid == pid_to_remove){ // Only one linke in list
-    do {
-      next_link_l = curr_link;
-    } while (cas(first_link, next_link_l, -1));
+    return (cas(first_link, curr_link, -1));
   }
 
-  else{
-    do {
-      prev_link_l = curr_link;
-    } while (cas(&curr_link, prev_link_l, (proc + prev_link_l)->next_proc) && (proc + curr_link)->pid != pid_to_remove);
-    // <prev_link_l> holds the location of the link "pointing" at <pid_to_remove>
-    // <curr_link> holds the location of <pid_to_remove>
-    next_link_l = (proc + curr_link)->next_proc; // Holds the location of the link <pid_to_remove> "points" at.
-    cas(&((proc + prev_link_l)->next_proc), curr_link, next_link_l); // Set the next link <prev_link_l> "points" at to <next_link_l>
-  }
-}
-
-void
-remove_link_cpu(int pid_to_remove){
-
-  push_off();
-  int c_id = cpuid();
-  struct cpu* c = mycpu();
-  pop_off();
-
-  int prev_link_l;
-  int next_link_l;
-  int curr_link = c->first_runnable_proc;
-  struct proc *p;
-
-  if((proc + curr_link)->pid == pid_to_remove){ // Only one linke in list
-    do {
-      next_link_l = curr_link;
-    } while (cas(&(c->first_runnable_proc), next_link_l, -1));
-  }
-  
-  else{
-    do {
-      prev_link_l = curr_link;
-    } while (cas(&curr_link, prev_link_l, (proc + prev_link_l)->next_proc) && (proc + curr_link)->pid != pid_to_remove);
-    // <prev_link_l> holds the location of the link "pointing" at <pid_to_remove>
-    // <curr_link> holds the location of <pid_to_remove>
-    next_link_l = (proc + curr_link)->next_proc; // Holds the location of the link <pid_to_remove> "points" at.
-    cas(&((proc + prev_link_l)->next_proc), curr_link, next_link_l); // Set the next link <prev_link_l> "points" at to <next_link_l>
-  }
+  do {
+    prev_link = curr_link;
+  } while(cas(&curr_link, prev_link, (proc + prev_link)->next_proc) && (proc + curr_link)->pid != pid_to_remove) ;
+  // <prev_link> holds the index of the link "pointing" at <pid_to_remove>
+  // <curr_link> holds the index of <pid_to_remove>
+  next_link = (proc + curr_link)->next_proc; // Holds the location of the link <pid_to_remove> "points" at.
+  return cas(&((proc + prev_link)->next_proc), curr_link, next_link); // Set the next link <prev_link> "points" at to <next_link>
 }
