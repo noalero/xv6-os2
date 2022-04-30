@@ -105,12 +105,9 @@ myproc(void) {
 int
 allocpid() { // Changed as required
   int pid;
-  printf("allocpid()\n");
   do {
     pid = nextpid;
-    printf("pid: %d\n", pid);
   } while (cas(&nextpid, pid, pid + 1));
-  printf("before return pid: %d\n", pid);
   return pid;
 
     // int pid;
@@ -679,8 +676,6 @@ procdump(void)
   }
 }
 
-// TODO: add validity checks, change return val type to int, it will indicate if the function was successful
-//TODO: make it generic
 
 int
 add_link(int *first_link, int new_link_pid){
@@ -748,4 +743,27 @@ remove_link(int *first_link, int pid_to_remove){
   // <curr_link> holds the index of <pid_to_remove>
   next_link = (proc + curr_link)->next_proc; // Holds the location of the link <pid_to_remove> "points" at.
   return cas(&((proc + prev_link)->next_proc), curr_link, next_link); // Set the next link <prev_link> "points" at to <next_link>
+}
+
+// For debugging
+int
+print_list(int loop_size){
+  struct  proc *p;
+  int list = -1;
+  
+  for (p = proc; p < &proc[NPROC]; p++){
+      add_link(&list, p->pid);
+      //printf("link added: %d\n", p->pid);
+  }
+  int link = list;
+  int count = 0;
+  int temp;
+  do {
+    temp = link;
+    count++;
+    //printf("link index: %d\n", temp);
+  }
+  while (cas(&link, temp, (proc + link)->next_proc)) ; 
+  printf("list size: %d\n", count);
+  return 0;
 }

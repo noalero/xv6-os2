@@ -9,6 +9,7 @@
 #include "kernel/riscv.h"
 
 
+
 void part2(int loop_size){
     int pid = loop_size + 2;
     if(pid > 0){
@@ -27,8 +28,16 @@ void part2(int loop_size){
     // }
 }
 
+void linked_list (int loop_size){
+    print_list(loop_size);
+}
+    
+
 int main(int argc, char* argv[]){
     int loop_size = 2;
-    part2(loop_size);
+    //part2(loop_size);
+    fork();
+    fork();
+    linked_list(loop_size);
     return 0;
 }
