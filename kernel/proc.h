@@ -24,6 +24,7 @@ struct cpu {
   struct context context;     // swtch() here to enter scheduler().
   int noff;                   // Depth of push_off() nesting.
   int intena;                 // Were interrupts enabled before push_off()?
+  int first_runnable_proc;    // The location (in proc[] array) of the first process of it's Runnable list
 };
 
 extern struct cpu cpus[NCPU];
@@ -92,6 +93,8 @@ struct proc {
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
+  int next_proc;               // The location (in proc[] array) of the next process of it's current list.
+  int cpu_num;                 // Number of the CPU whose RUNNABLE list contains this process
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process

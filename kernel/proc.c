@@ -28,6 +28,21 @@ struct spinlock wait_lock;
 
 extern uint64 cas(volatile void *addr, int expected, int newval);
 
+/*
+  Process: Each process will have a field: <next_proc> that will hold the location (in proc[] array) of the next process of it's current list.
+           (The value of the field will be between (0 - NPROC), or -1 if this process is the last one in the list).
+  CPU: Each CPU will have a field <first_runnable_proc> that will hold the location (in proc[] array) of the first process of it's Runnable list.
+       If the list is empty <first_runnable_proc> will be set to -1.
+  States lists: Three global variables: <sleeping_list>, <zombie_list>, <unused_list> 
+                Each variable will hold the location (in proc[] array) of the first process/ entry in the respective list.
+                If the list is empty, the value of the global variable will be -1.
+  ## All of the above fields and global variables will be initialized to -1.
+*/
+
+int sleeping_list;
+int zombie_list;
+int unused_list;
+
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
 // guard page.
