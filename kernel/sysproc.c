@@ -95,3 +95,10 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+// For debugging
+uint64
+sys_print_list(void){
+  print_list(8);
+  return 0;
+}
