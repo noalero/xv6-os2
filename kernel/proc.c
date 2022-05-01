@@ -727,7 +727,7 @@ remove_link(int *first_link, int pid_to_remove){
   int prev_link;
   int next_link;
 
-  // TODO: Chek if return value of a list that doesn't contain <pid_to_remove> should be 0 / -1
+  // TODO: Check if return value of a list that doesn't contain <pid_to_remove> should be 0 / -1
   if (*first_link == -1) { // Empty list
     return -1;
   }
