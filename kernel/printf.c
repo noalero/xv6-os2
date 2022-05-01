@@ -2,6 +2,7 @@
 // formatted console output -- printf, panic.
 //
 //CHECK-OMRI
+//CHECK2-OMRI
 #include <stdarg.h>
 
 #include "types.h"
