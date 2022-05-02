@@ -102,3 +102,15 @@ sys_print_list(void){
   print_list(8);
   return 0;
 }
+
+uint64
+sys_set_cpu(void){
+  set_cpu(-1);
+  return -1;
+}
+
+uint64
+sys_get_cpu(void){
+  get_cpu();
+  return -1;
+}

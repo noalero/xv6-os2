@@ -21,3 +21,6 @@
 #define SYS_mkdir  20
 #define SYS_close  21
 #define SYS_print_list  22 // For debugging
+#define SYS_set_cpu 23
+#define SYS_get_cpu 24
+

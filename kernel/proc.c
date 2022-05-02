@@ -676,7 +676,7 @@ procdump(void)
   }
 }
 
-
+// TODO: check if this function was called from CPU, if so, update <p->cpu_num>
 int
 add_link(int *first_link, int new_link_pid){
   /*If the list is a CPU's RUNNABLE list, <first_link> is a pointer to <c->first_runnable_proc>*/
@@ -766,4 +766,14 @@ print_list(int loop_size){
   while (cas(&link, temp, (proc + link)->next_proc)) ; 
   printf("list size: %d\n", count);
   return 0;
+}
+
+int
+set_cpu(intcpu_num){
+  return -1;
+}
+
+int
+get_cpu(void){
+  return -1;
 }

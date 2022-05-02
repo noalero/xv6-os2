@@ -37,3 +37,5 @@ entry("sbrk");
 entry("sleep");
 entry("uptime");
 entry("print_list");
+entry("set_cpu");
+entry("get_cpu");

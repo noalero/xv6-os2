@@ -106,6 +106,8 @@ int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
 int             add_link(int *first_link, int new_link_pid);
 int             remove_link(int *first_link, int pid_to_remove);
+int             set_cpu(int cpu_num);
+int             get_cpu(void);
 int             print_list(int loop_size); // For debugging
 
 // swtch.S
