@@ -330,8 +330,10 @@ fork(void)
 
   acquire(&wait_lock);
   np->parent = p;
+  np->cpu_num = p->cpu_num; // 3.1.5.3
   release(&wait_lock);
 
+  add_link((cpus + np->cpu_num), np->pid); // 3.1.5.3 Add new process to the parent's CPU's RUNNABLE list
   acquire(&np->lock);
   np->state = RUNNABLE;
   release(&np->lock);
@@ -466,22 +468,37 @@ scheduler(void)
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
 
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+    // 3.1.5.4
+    int pid = (cpus + get_cpu())->first_runnable_proc;
+    int *first_link_loc = &((cpus + get_cpu())->first_runnable_proc);
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-      }
-      release(&p->lock);
+    while(pid != -1){
+      p = (proc + pid);
+      remove_link(first_link_loc, pid);
+      p->state = RUNNING;
+      c->proc = p;
+      swtch(&c->context, &p->context);
+      c->proc = 0;
+      pid = *first_link_loc;
+      // TODO: Check if lock is needed.
     }
+
+    // for(p = proc; p < &proc[NPROC]; p++) {
+    //   acquire(&p->lock);
+    //   if(p->state == RUNNABLE) {
+    //     // Switch to chosen process.  It is the process's job
+    //     // to release its lock and then reacquire it
+    //     // before jumping back to us.
+    //     p->state = RUNNING;
+    //     c->proc = p;
+    //     swtch(&c->context, &p->context);
+
+    //     // Process is done running for now.
+    //     // It should have changed its p->state before coming back.
+    //     c->proc = 0;
+    //   }
+    //   release(&p->lock);
+    // }
   }
 }
 
@@ -768,12 +785,16 @@ print_list(int loop_size){
   return 0;
 }
 
+// 3.1.5.1
 int
 set_cpu(intcpu_num){
+  //TODO
   return -1;
 }
 
+// 3.1.5.2
 int
 get_cpu(void){
+  //TODO
   return -1;
 }
