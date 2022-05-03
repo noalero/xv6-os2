@@ -67,14 +67,17 @@ procinit(void)
   
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
-  int i =0;
+  int i = 0;
+  int j;
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
       p->kstack = KSTACK((int) (p - proc));
       // Task 3.1.5.10
       p->index = i;
+      printf("procinit: pid = %d\n", p->pid);
       add_link(&unused_list, p->index);
-      i++;
+      j = i;
+      (cas(&i, j, j + 1));
   }
 }
 
@@ -133,9 +136,13 @@ allocproc(void)
   // Task 3.1.5.11
   struct proc *p;
   int index = unused_list;
-  if (index == -1){ return -1;}
+  if (index == -1){ return 0;}
   p = proc + index;
   acquire(&p->lock);
+
+  p->cpu_num = -1;
+  p->index = index;
+  p->next_proc = -1;
 
 
   // for(p = proc; p < &proc[NPROC]; p++) {
@@ -148,7 +155,7 @@ allocproc(void)
   // }
   // return 0;
 
-found:
+
   p->pid = allocpid();
   p->state = USED;
 
@@ -198,6 +205,8 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  p->cpu_num = -1;
+  p->next_proc = -1;
   p->state = UNUSED;
   
 }
@@ -357,7 +366,7 @@ fork(void)
     }
   }
 
-  add_link((cpus + np->cpu_num), np->index); // 3.1.5.3 Add new process to the parent's CPU's RUNNABLE list
+  add_link(&((cpus + np->cpu_num)->first_runnable_proc), np->index); // 3.1.5.3 Add new process to the parent's CPU's RUNNABLE list
   acquire(&np->lock);
   np->state = RUNNABLE;
   release(&np->lock);
@@ -487,6 +496,8 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+  int index;
+  int *first_link_loc;
   
   c->proc = 0;
   for(;;){
@@ -494,8 +505,8 @@ scheduler(void)
     intr_on();
 
     // 3.1.5.4
-    int index = (cpus + get_cpu())->first_runnable_proc;
-    int *first_link_loc = &((cpus + get_cpu())->first_runnable_proc);
+    first_link_loc = &((cpus + cpuid())->first_runnable_proc);
+    index = *first_link_loc;
 
     while(index != -1){
       p = (proc + index);
@@ -610,7 +621,7 @@ sleep(void *chan, struct spinlock *lk)
   p->chan = chan;
   p->state = SLEEPING;
   // Task 3.1.5.7
-  remove_link(&(getmycpu()->first_runnable_proc), p->index);
+  remove_link(&(mycpu()->first_runnable_proc), p->index);
   add_link(&sleeping_list, p->index);
 
   sched();
@@ -749,21 +760,14 @@ int
 add_link(int *first_link, int new_proc_index){
   /*If the list is a CPU's RUNNABLE list, <first_link> is a pointer to <c->first_runnable_proc>*/
   /*If the list is a global variable, <first_link> is a pointer to <state_list>*/
-  struct  proc *p;
   int curr_link;
   int next_link;
 
-  
-  // Find the <new_link> index in <proc[]> array
-  // for(p = proc; p < &proc[NPROC]; p++) {
-  //   if(p->pid == new_link_pid){
-  //     new_proc_index = p - proc;
-  //     break;
-  //   }
-  // }
   if (new_proc_index < 0 || new_proc_index > NPROC){ // Imposible index
     return -1;
   }
+
+  printf("add_link: new_proc_index = %d\n", new_proc_index);
 
   // Empty list
   if(cas(first_link, -1, new_proc_index)){ // Set the pointer to the new first link index
@@ -799,7 +803,7 @@ remove_link(int *first_link, int proc_to_remove_index){
     return -1;
   }
 
-  if(first_link == proc_to_remove_index){ // Only one linke in list
+  if(*first_link == proc_to_remove_index){ // Only one linke in list
     return (cas(first_link, curr_link, -1));
   }
 
@@ -837,7 +841,7 @@ print_list(int loop_size){
 
 // 3.1.5.1
 int
-set_cpu(intcpu_num){
+set_cpu(int cpu_num){
   //TODO
   return -1;
 }
