@@ -64,21 +64,28 @@ void
 procinit(void)
 {
   struct proc *p;
+  unused_list = -1;
+  sleeping_list = -1;
+  zombie_list = -1;
   
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
+
+  // Task 3.1.5.10
   int i = 0;
-  int j;
-  for(p = proc; p < &proc[NPROC]; p++) {
-      initlock(&p->lock, "proc");
-      p->kstack = KSTACK((int) (p - proc));
-      // Task 3.1.5.10
-      p->index = i;
-      printf("procinit: pid = %d\n", p->pid);
-      add_link(&unused_list, p->index);
-      j = i;
-      (cas(&i, j, j + 1));
-  }
+  do {
+    p = proc + i;
+    initlock(&p->lock, "proc");
+    p->kstack = KSTACK((int) (p - proc));
+    p->index = i;
+    p->next_proc = -1;
+    p->cpu_num = -1;
+    add_link(&unused_list, p->index, -1);
+    i++;
+    printf("procinit: i = %d\n", i); // TODO
+  } while(i <= NPROC);
+  printf("procinit: after while index = %d\n", i); // TODO
+
 }
 
 // Must be called with interrupts disabled,
@@ -112,10 +119,10 @@ myproc(void) {
 
 int
 allocpid() { // Changed as required
-  int pid;
-  do {
-    pid = nextpid;
-  } while (cas(&nextpid, pid, pid + 1));
+  int pid = nextpid;
+  printf("allocpid: pid = %d\n", pid);
+  if (pid < NPROC && cas(&nextpid, pid, pid + 1));
+  else if (pid > NPROC) {return -1;}
   return pid;
 
     // int pid;
@@ -136,14 +143,10 @@ allocproc(void)
   // Task 3.1.5.11
   struct proc *p;
   int index = unused_list;
+  printf("allocproc: index = %d\n", index);
   if (index == -1){ return 0;}
   p = proc + index;
   acquire(&p->lock);
-
-  p->cpu_num = -1;
-  p->index = index;
-  p->next_proc = -1;
-
 
   // for(p = proc; p < &proc[NPROC]; p++) {
   //   acquire(&p->lock);
@@ -158,6 +161,7 @@ allocproc(void)
 
   p->pid = allocpid();
   p->state = USED;
+  remove_link(&unused_list, index);
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -196,7 +200,7 @@ freeproc(struct proc *p)
     proc_freepagetable(p->pagetable, p->sz);
   // Task 3.1.5.6
   remove_link(&zombie_list, p->index);
-  add_link(&unused_list, p->index);
+  add_link(&unused_list, p->index, -1);
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -273,6 +277,7 @@ userinit(void)
   struct proc *p;
 
   p = allocproc();
+  if(p == 0){ return;}
   initproc = p;
   
   // allocate one user page and copy init's instructions
@@ -287,8 +292,8 @@ userinit(void)
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
-  add_link(&(cpus->first_runnable_proc), p->index); // Task 3.1.5.9
-
+  add_link(&(cpus->first_runnable_proc), p->index, 0); // Task 3.1.5.9
+  printf("userinit: index = %d\n", p->index); // TODO
   p->state = RUNNABLE;
 
   release(&p->lock);
@@ -319,6 +324,7 @@ growproc(int n)
 int
 fork(void)
 {
+  printf("fork\n"); // TODO
   int i, pid;
   struct proc *np;
   struct proc *p = myproc();
@@ -366,8 +372,9 @@ fork(void)
     }
   }
 
-  add_link(&((cpus + np->cpu_num)->first_runnable_proc), np->index); // 3.1.5.3 Add new process to the parent's CPU's RUNNABLE list
   acquire(&np->lock);
+  add_link(&((cpus + np->cpu_num)->first_runnable_proc), np->index, np->cpu_num); // 3.1.5.3 Add new process to the parent's CPU's RUNNABLE list
+  printf("fork: add_link: np->pid = %d, np->index = %d\n", np->pid, np->index);
   np->state = RUNNABLE;
   release(&np->lock);
 
@@ -426,7 +433,7 @@ exit(int status)
 
   p->xstate = status;
   p->state = ZOMBIE;
-  add_link(&zombie_list, p->index); // Task 3.1.5.5
+  add_link(&zombie_list, p->index, -1); // Task 3.1.5.5
 
   release(&wait_lock);
 
@@ -496,31 +503,37 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
-  int index;
-  int *first_link_loc;
-  
+  int index, i;
+  int *first_link_loc = &(c->first_runnable_proc);
+
   c->proc = 0;
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
 
     // 3.1.5.4
-    first_link_loc = &((cpus + cpuid())->first_runnable_proc);
     index = *first_link_loc;
-
-    while(index != -1){
-      p = (proc + index);
-      acquire(&(p->lock));
-      if (remove_link(first_link_loc, index)){
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-        c->proc = 0;
-      }
-      release(&(p->lock));
-      index = *first_link_loc;
+    if(index != -1){ // CPU's RUNNABLE list is empty
+      i = index;
+      do {
+        p = proc + index;
+        acquire(&p->lock);
+        if(remove_link(first_link_loc, index)){
+          printf("scheduler: remove_link: index = %d p->pid = %d\n", index, p->pid);
+          p->state = RUNNING;
+          c->proc = p;
+          swtch(&c->context, &p->context);
+          c->proc = 0;
+        }
+        release(&p->lock);
+        i = index;
+      } while(cas(&index, i, *first_link_loc) && index != -1);
+        // <first_link_loc> had changed in <remove_link>
     }
-
+    else{
+      //printf("scheduler c = %d\n", cpuid()); // TODO
+    }
+    
     // for(p = proc; p < &proc[NPROC]; p++) {
     //   acquire(&p->lock);
     //   if(p->state == RUNNABLE) {
@@ -574,7 +587,7 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
-  add_link(&((cpus + p->cpu_num)->first_runnable_proc), p->index); // Task 3.1.5.12
+  add_link(&((cpus + p->cpu_num)->first_runnable_proc), p->index, p->cpu_num); // Task 3.1.5.12
   sched();
   release(&p->lock);
 }
@@ -622,7 +635,7 @@ sleep(void *chan, struct spinlock *lk)
   p->state = SLEEPING;
   // Task 3.1.5.7
   remove_link(&(mycpu()->first_runnable_proc), p->index);
-  add_link(&sleeping_list, p->index);
+  add_link(&sleeping_list, p->index, -1);
 
   sched();
 
@@ -654,7 +667,7 @@ wakeup(void *chan)
       if (p->chan == chan){
         remove_link(&sleeping_list, p->index);
         p->state = RUNNABLE;
-        add_link(&((cpus + p->cpu_num)->first_runnable_proc), p->index);
+        add_link(&((cpus + p->cpu_num)->first_runnable_proc), p->index, p->cpu_num);
       }
       release(&p->lock);
     }
@@ -757,22 +770,28 @@ procdump(void)
 
 // TODO: check if this function was called from CPU, if so, update <p->cpu_num>
 int
-add_link(int *first_link, int new_proc_index){
+add_link(int *first_link, int new_proc_index, int cpu_num){
   /*If the list is a CPU's RUNNABLE list, <first_link> is a pointer to <c->first_runnable_proc>*/
-  /*If the list is a global variable, <first_link> is a pointer to <state_list>*/
+  /*If the list is a global variable, <first_link> is a pointer to <state_list>, <cpu_num> is -1*/
+  
   int curr_link;
   int next_link;
+  int cpu;
 
   if (new_proc_index < 0 || new_proc_index > NPROC){ // Imposible index
     return -1;
   }
 
-  printf("add_link: new_proc_index = %d\n", new_proc_index);
-
   // Empty list
+  printf("add_link: first_link before cas is %d\n", *first_link); //TODO
   if(cas(first_link, -1, new_proc_index)){ // Set the pointer to the new first link index
-    curr_link = (proc + *first_link)->next_proc;
-    return cas(&((proc + *first_link)->next_proc), curr_link, -1); // Set last link <next_proc> to -1
+    printf("add_link: first_link = %d\n", *first_link); // TODO
+    cpu = (proc + new_proc_index)->cpu_num;
+    if(cpu_num){ // CPU's RUNNABLE list
+      cas(&((proc + new_proc_index)->cpu_num), cpu, cpu_num);
+    }
+    curr_link = (proc + new_proc_index)->next_proc;
+    return cas(&((proc + new_proc_index)->next_proc), curr_link, -1); // Set last link <next_proc> to -1
   }
   else{
     // Find the last link
@@ -780,9 +799,14 @@ add_link(int *first_link, int new_proc_index){
     do {
       next_link = curr_link;
     } while (((proc + next_link)->next_proc >= 0) && cas(&curr_link, next_link, (proc + next_link)->next_proc)) ;
-    // <curr_lonk> holds the last link
+    // <curr_link> holds the last link
 
-    if (cas(&((proc + next_link)->next_proc), -1, new_proc_index)){ // Set last link <next_proc> to <new_proc_index>
+    if (cas(&((proc + curr_link)->next_proc), -1, new_proc_index)){ // Set last link <next_proc> to <new_proc_index>
+      printf("add_link: next_link = %d\n", (proc + curr_link)->next_proc); // TODO
+       cpu = (proc + new_proc_index)->cpu_num;
+      if(cpu_num){ // CPU's RUNNABLE list
+        cas(&((proc + new_proc_index)->cpu_num), cpu, cpu_num);
+      } 
       curr_link = (proc + new_proc_index)->next_proc;
       return cas(&((proc + new_proc_index)->next_proc), curr_link, -1); // Set last link <next_proc> to -1
     }
@@ -803,7 +827,7 @@ remove_link(int *first_link, int proc_to_remove_index){
     return -1;
   }
 
-  if(*first_link == proc_to_remove_index){ // Only one linke in list
+  if(*first_link == proc_to_remove_index){ // Only one link in list
     return (cas(first_link, curr_link, -1));
   }
 
@@ -823,7 +847,7 @@ print_list(int loop_size){
   int list = -1;
   
   for (p = proc; p < &proc[NPROC]; p++){
-      add_link(&list, p->pid);
+      add_link(&list, p->pid, -1);
       //printf("link added: %d\n", p->pid);
   }
   int link = list;

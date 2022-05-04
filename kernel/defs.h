@@ -104,7 +104,7 @@ void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
-int             add_link(int *first_link, int new_link_index);
+int             add_link(int *first_link, int new_link_index, int cpu_num);
 int             remove_link(int *first_link, int proc_to_remove_index);
 int             set_cpu(int cpu_num);
 int             get_cpu(void);
