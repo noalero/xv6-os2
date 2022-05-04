@@ -121,7 +121,7 @@ int
 allocpid() { // Changed as required
   int pid = nextpid;
   printf("allocpid: pid = %d\n", pid);
-  if (pid < NPROC && cas(&nextpid, pid, pid + 1));
+  if (pid < NPROC && !cas(&nextpid, pid, pid + 1));
   else if (pid > NPROC) {return -1;}
   return pid;
 
@@ -527,7 +527,7 @@ scheduler(void)
         }
         release(&p->lock);
         i = index;
-      } while(cas(&index, i, *first_link_loc) && index != -1);
+      } while(!cas(&index, i, *first_link_loc) && index != -1);
         // <first_link_loc> had changed in <remove_link>
     }
     else{
@@ -672,7 +672,7 @@ wakeup(void *chan)
       release(&p->lock);
     }
     old = index;
-  }  while(cas(&index, old, p->next_proc) && index != -1) ;
+  }  while(!cas(&index, old, p->next_proc) && index != -1) ;
     
   // for(p = proc; p < &proc[NPROC]; p++) {
   //   if(p != myproc()){
@@ -768,7 +768,6 @@ procdump(void)
   }
 }
 
-// TODO: check if this function was called from CPU, if so, update <p->cpu_num>
 int
 add_link(int *first_link, int new_proc_index, int cpu_num){
   /*If the list is a CPU's RUNNABLE list, <first_link> is a pointer to <c->first_runnable_proc>*/
@@ -783,9 +782,7 @@ add_link(int *first_link, int new_proc_index, int cpu_num){
   }
 
   // Empty list
-  printf("add_link: first_link before cas is %d\n", *first_link); //TODO
-  if(cas(first_link, -1, new_proc_index)){ // Set the pointer to the new first link index
-    printf("add_link: first_link = %d\n", *first_link); // TODO
+  if(!cas(first_link, -1, new_proc_index)){ // Set the pointer to the new first link index
     cpu = (proc + new_proc_index)->cpu_num;
     if(cpu_num){ // CPU's RUNNABLE list
       cas(&((proc + new_proc_index)->cpu_num), cpu, cpu_num);
@@ -798,10 +795,10 @@ add_link(int *first_link, int new_proc_index, int cpu_num){
     curr_link = *first_link; // Will hold the index in <proc[]> array of the current link
     do {
       next_link = curr_link;
-    } while (((proc + next_link)->next_proc >= 0) && cas(&curr_link, next_link, (proc + next_link)->next_proc)) ;
+    } while (((proc + next_link)->next_proc >= 0) && !cas(&curr_link, next_link, (proc + next_link)->next_proc)) ;
     // <curr_link> holds the last link
 
-    if (cas(&((proc + curr_link)->next_proc), -1, new_proc_index)){ // Set last link <next_proc> to <new_proc_index>
+    if (!cas(&((proc + curr_link)->next_proc), -1, new_proc_index)){ // Set last link <next_proc> to <new_proc_index>
       printf("add_link: next_link = %d\n", (proc + curr_link)->next_proc); // TODO
        cpu = (proc + new_proc_index)->cpu_num;
       if(cpu_num){ // CPU's RUNNABLE list
@@ -833,7 +830,7 @@ remove_link(int *first_link, int proc_to_remove_index){
 
   do {
     prev_link = curr_link;
-  } while(cas(&curr_link, prev_link, (proc + prev_link)->next_proc) && curr_link != proc_to_remove_index) ;
+  } while(!cas(&curr_link, prev_link, (proc + prev_link)->next_proc) && curr_link != proc_to_remove_index) ;
   // <prev_link> holds the index of the link "pointing" at <pid_to_remove>
   // <curr_link> holds the index of <pid_to_remove>
   next_link = (proc + curr_link)->next_proc; // Holds the location of the link <pid_to_remove> "points" at.
@@ -858,7 +855,7 @@ print_list(int loop_size){
     count++;
     //printf("link index: %d\n", temp);
   }
-  while (cas(&link, temp, (proc + link)->next_proc)) ; 
+  while (!cas(&link, temp, (proc + link)->next_proc)) ; 
   printf("list size: %d\n", count);
   return 0;
 }
