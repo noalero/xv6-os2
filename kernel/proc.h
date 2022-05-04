@@ -24,7 +24,6 @@ struct cpu {
   struct context context;     // swtch() here to enter scheduler().
   int noff;                   // Depth of push_off() nesting.
   int intena;                 // Were interrupts enabled before push_off()?
-  int first_runnable_proc;    // The index (in proc[] array) of the first process of it's Runnable list
 };
 
 extern struct cpu cpus[NCPU];

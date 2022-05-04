@@ -31,8 +31,9 @@ extern uint64 cas(volatile void *addr, int expected, int newval);
 /*
   Process: Each process will have a field: <next_proc> that will hold the index (in proc[] array) of the next process of it's current list.
            (The value of the field will be between (0 - NPROC), or -1 if this process is the last one in the list).
-  CPU: Each CPU will have a field <first_runnable_proc> that will hold the index (in proc[] array) of the first process of it's Runnable list.
-       If the list is empty <first_runnable_proc> will be set to -1.
+           In addition, each process will have a field <index> that will hold the index in <proc[]> array of the process.
+  CPU: There will be an array <cpus_list> of size <NCPU> that will hold the index of the firt process in the runnable list of the coresponding cpu.
+       If the list is empty <cpus_lists> will be set to -1.
   States lists: Three global variables: <sleeping_list>, <zombie_list>, <unused_list> 
                 Each variable will hold the index (in proc[] array) of the first process/ entry in the respective list.
                 If the list is empty, the value of the global variable will be -1.
@@ -42,6 +43,8 @@ extern uint64 cas(volatile void *addr, int expected, int newval);
 int sleeping_list;
 int zombie_list;
 int unused_list;
+
+int cpus_lists[NCPU] = { [ 0 ... (NCPU - 1) ] = -1};
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -82,10 +85,7 @@ procinit(void)
     p->cpu_num = -1;
     add_link(&unused_list, p->index, -1);
     i++;
-    printf("procinit: i = %d\n", i); // TODO
   } while(i <= NPROC);
-  printf("procinit: after while index = %d\n", i); // TODO
-
 }
 
 // Must be called with interrupts disabled,
@@ -120,7 +120,6 @@ myproc(void) {
 int
 allocpid() { // Changed as required
   int pid = nextpid;
-  printf("allocpid: pid = %d\n", pid);
   if (pid < NPROC && !cas(&nextpid, pid, pid + 1));
   else if (pid > NPROC) {return -1;}
   return pid;
@@ -143,7 +142,6 @@ allocproc(void)
   // Task 3.1.5.11
   struct proc *p;
   int index = unused_list;
-  printf("allocproc: index = %d\n", index);
   if (index == -1){ return 0;}
   p = proc + index;
   acquire(&p->lock);
@@ -292,8 +290,7 @@ userinit(void)
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
-  add_link(&(cpus->first_runnable_proc), p->index, 0); // Task 3.1.5.9
-  printf("userinit: index = %d\n", p->index); // TODO
+  add_link(&(cpus_lists[0]), p->index, 0); // Task 3.1.5.9
   p->state = RUNNABLE;
 
   release(&p->lock);
@@ -373,7 +370,7 @@ fork(void)
   }
 
   acquire(&np->lock);
-  add_link(&((cpus + np->cpu_num)->first_runnable_proc), np->index, np->cpu_num); // 3.1.5.3 Add new process to the parent's CPU's RUNNABLE list
+  add_link((cpus_lists + np->cpu_num), np->index, np->cpu_num); // 3.1.5.3 Add new process to the parent's CPU's RUNNABLE list
   printf("fork: add_link: np->pid = %d, np->index = %d\n", np->pid, np->index);
   np->state = RUNNABLE;
   release(&np->lock);
@@ -504,7 +501,8 @@ scheduler(void)
   struct proc *p;
   struct cpu *c = mycpu();
   int index, i;
-  int *first_link_loc = &(c->first_runnable_proc);
+  int cpu_id = cpuid();
+  int *first_link_loc;
 
   c->proc = 0;
   for(;;){
@@ -512,7 +510,9 @@ scheduler(void)
     intr_on();
 
     // 3.1.5.4
+    first_link_loc = cpus_lists + cpu_id;
     index = *first_link_loc;
+    //printf("scheduler: index = %d, cpu_id = %d\n", index, cpu_id); // TODO
     if(index != -1){ // CPU's RUNNABLE list is empty
       i = index;
       do {
@@ -529,9 +529,6 @@ scheduler(void)
         i = index;
       } while(!cas(&index, i, *first_link_loc) && index != -1);
         // <first_link_loc> had changed in <remove_link>
-    }
-    else{
-      //printf("scheduler c = %d\n", cpuid()); // TODO
     }
     
     // for(p = proc; p < &proc[NPROC]; p++) {
@@ -587,7 +584,7 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
-  add_link(&((cpus + p->cpu_num)->first_runnable_proc), p->index, p->cpu_num); // Task 3.1.5.12
+  add_link((cpus_lists + p->cpu_num), p->index, p->cpu_num); // Task 3.1.5.12
   sched();
   release(&p->lock);
 }
@@ -634,7 +631,7 @@ sleep(void *chan, struct spinlock *lk)
   p->chan = chan;
   p->state = SLEEPING;
   // Task 3.1.5.7
-  remove_link(&(mycpu()->first_runnable_proc), p->index);
+  remove_link((cpus_lists + cpuid()), p->index);
   add_link(&sleeping_list, p->index, -1);
 
   sched();
@@ -667,7 +664,7 @@ wakeup(void *chan)
       if (p->chan == chan){
         remove_link(&sleeping_list, p->index);
         p->state = RUNNABLE;
-        add_link(&((cpus + p->cpu_num)->first_runnable_proc), p->index, p->cpu_num);
+        add_link((cpus_lists + p->cpu_num), p->index, p->cpu_num);
       }
       release(&p->lock);
     }
@@ -770,7 +767,7 @@ procdump(void)
 
 int
 add_link(int *first_link, int new_proc_index, int cpu_num){
-  /*If the list is a CPU's RUNNABLE list, <first_link> is a pointer to <c->first_runnable_proc>*/
+  /*If the list is a CPU's RUNNABLE list, <first_link> is a pointer to <cpus_lists[cpu id]>*/
   /*If the list is a global variable, <first_link> is a pointer to <state_list>, <cpu_num> is -1*/
   
   int curr_link;
@@ -788,7 +785,7 @@ add_link(int *first_link, int new_proc_index, int cpu_num){
       cas(&((proc + new_proc_index)->cpu_num), cpu, cpu_num);
     }
     curr_link = (proc + new_proc_index)->next_proc;
-    return cas(&((proc + new_proc_index)->next_proc), curr_link, -1); // Set last link <next_proc> to -1
+    return !cas(&((proc + new_proc_index)->next_proc), curr_link, -1); // Set last link <next_proc> to -1
   }
   else{
     // Find the last link
@@ -799,13 +796,12 @@ add_link(int *first_link, int new_proc_index, int cpu_num){
     // <curr_link> holds the last link
 
     if (!cas(&((proc + curr_link)->next_proc), -1, new_proc_index)){ // Set last link <next_proc> to <new_proc_index>
-      printf("add_link: next_link = %d\n", (proc + curr_link)->next_proc); // TODO
        cpu = (proc + new_proc_index)->cpu_num;
       if(cpu_num){ // CPU's RUNNABLE list
         cas(&((proc + new_proc_index)->cpu_num), cpu, cpu_num);
       } 
       curr_link = (proc + new_proc_index)->next_proc;
-      return cas(&((proc + new_proc_index)->next_proc), curr_link, -1); // Set last link <next_proc> to -1
+      return !cas(&((proc + new_proc_index)->next_proc), curr_link, -1); // Set last link <next_proc> to -1
     }
     return -1;
   }
@@ -825,7 +821,7 @@ remove_link(int *first_link, int proc_to_remove_index){
   }
 
   if(*first_link == proc_to_remove_index){ // Only one link in list
-    return (cas(first_link, curr_link, -1));
+    return !(cas(first_link, curr_link, -1));
   }
 
   do {
@@ -834,7 +830,7 @@ remove_link(int *first_link, int proc_to_remove_index){
   // <prev_link> holds the index of the link "pointing" at <pid_to_remove>
   // <curr_link> holds the index of <pid_to_remove>
   next_link = (proc + curr_link)->next_proc; // Holds the location of the link <pid_to_remove> "points" at.
-  return cas(&((proc + prev_link)->next_proc), curr_link, next_link); // Set the next link <prev_link> "points" at to <next_link>
+  return !cas(&((proc + prev_link)->next_proc), curr_link, next_link); // Set the next link <prev_link> "points" at to <next_link>
 }
 
 // For debugging
@@ -863,13 +859,20 @@ print_list(int loop_size){
 // 3.1.5.1
 int
 set_cpu(int cpu_num){
-  //TODO
+  struct  proc *p = myproc();
+  remove_link((cpus_lists + p->cpu_num), p->index);
+  // TODO: find out how to yield the cpu
+  add_link((cpus_lists + cpu_num), p->index, cpu_num);
+
+  
   return -1;
 }
 
 // 3.1.5.2
 int
 get_cpu(void){
-  //TODO
-  return -1;
+  int cpu_num = -1;
+  intr_off();
+  cpu_num = cpuid();
+  return cpu_num;
 }
