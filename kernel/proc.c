@@ -44,7 +44,7 @@ int sleeping_list;
 int zombie_list;
 int unused_list;
 
-int cpus_lists[NCPU] = { [ 0 ... (NCPU - 1) ] = -1};
+int cpus_lists[NCPU] = { [ 0 ... (NCPU - 1) ] = -1}; // List initialised to -1
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -75,17 +75,14 @@ procinit(void)
   initlock(&wait_lock, "wait_lock");
 
   // Task 3.1.5.10
-  int i = 0;
-  do {
-    p = proc + i;
+  for(p = proc; p < &proc[NPROC]; p++) {
     initlock(&p->lock, "proc");
     p->kstack = KSTACK((int) (p - proc));
-    p->index = i;
+    p->index = (p - proc);
     p->next_proc = -1;
     p->cpu_num = -1;
     add_link(&unused_list, p->index, -1);
-    i++;
-  } while(i <= NPROC);
+  }
 }
 
 // Must be called with interrupts disabled,
@@ -119,17 +116,14 @@ myproc(void) {
 
 int
 allocpid() { // Changed as required
-  int pid = nextpid;
-  if (pid < NPROC && !cas(&nextpid, pid, pid + 1));
-  else if (pid > NPROC) {return -1;}
+  push_off();
+  int pid;    
+  do {
+    pid = nextpid;
+  }
+  while(cas(&nextpid, pid, pid + 1));
+  pop_off();
   return pid;
-
-    // int pid;
-    // acquire(&pid_lock);
-    // pid = nextpid;
-    // nextpid = nextpid + 1;
-    // release(&pid_lock);
-    // return pid;
 }
 
 // Look in the process table for an UNUSED proc.
@@ -142,21 +136,10 @@ allocproc(void)
   // Task 3.1.5.11
   struct proc *p;
   int index = unused_list;
-  if (index == -1){ return 0;}
+  if (index == -1){ return 0;} // No free entry in <proc[]> array
+
   p = proc + index;
   acquire(&p->lock);
-
-  // for(p = proc; p < &proc[NPROC]; p++) {
-  //   acquire(&p->lock);
-  //   if(p->state == UNUSED) {
-  //     goto found;
-  //   } else {
-  //     release(&p->lock);
-  //   }
-  // }
-  // return 0;
-
-
   p->pid = allocpid();
   p->state = USED;
   remove_link(&unused_list, index);
@@ -184,6 +167,7 @@ allocproc(void)
 
   return p;
 }
+
 
 // free a proc structure and the data hanging from it,
 // including user pages.
@@ -273,7 +257,6 @@ void
 userinit(void)
 {
   struct proc *p;
-
   p = allocproc();
   if(p == 0){ return;}
   initproc = p;
@@ -290,9 +273,8 @@ userinit(void)
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
-  add_link(&(cpus_lists[0]), p->index, 0); // Task 3.1.5.9
-  p->state = RUNNABLE;
-
+  cas(&p->state, USED, RUNNABLE);
+  add_link(&cpus_lists[0], p->index, 0); // Task 3.1.5.9
   release(&p->lock);
 }
 
@@ -321,8 +303,7 @@ growproc(int n)
 int
 fork(void)
 {
-  printf("fork\n"); // TODO
-  int i, pid;
+  int i, j, pid;
   struct proc *np;
   struct proc *p = myproc();
 
@@ -330,6 +311,7 @@ fork(void)
   if((np = allocproc()) == 0){
     return -1;
   }
+  // holding np->lock
 
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
@@ -352,28 +334,24 @@ fork(void)
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
-
   pid = np->pid;
-
+  np->cpu_num = p->cpu_num;
+  for(i = 0; i < NPROC; i++){
+    if((proc + i)-> pid == pid){
+      do{
+        j = np->index;
+      } while(cas(&(np->index), j, i));
+      break;
+    }
+  }
   release(&np->lock);
 
   acquire(&wait_lock);
   np->parent = p;
-  np->cpu_num = p->cpu_num; // 3.1.5.3
   release(&wait_lock);
 
-  for(int i = 0; i < NPROC; i++){
-    if((proc + i)->pid == pid){
-      np->index = i;
-      break;
-    }
-  }
-
-  acquire(&np->lock);
   add_link((cpus_lists + np->cpu_num), np->index, np->cpu_num); // 3.1.5.3 Add new process to the parent's CPU's RUNNABLE list
-  printf("fork: add_link: np->pid = %d, np->index = %d\n", np->pid, np->index);
-  np->state = RUNNABLE;
-  release(&np->lock);
+  cas(&np->state, USED, RUNNABLE);
 
   return pid;
 }
@@ -447,7 +425,6 @@ wait(uint64 addr)
   struct proc *np;
   int havekids, pid;
   struct proc *p = myproc();
-
   acquire(&wait_lock);
 
   for(;;){
@@ -482,7 +459,6 @@ wait(uint64 addr)
       release(&wait_lock);
       return -1;
     }
-    
     // Wait for a child to exit.
     sleep(p, &wait_lock);  //DOC: wait-sleep
   }
@@ -498,7 +474,7 @@ wait(uint64 addr)
 void
 scheduler(void)
 {
-  struct proc *p;
+  struct proc *p = 0;
   struct cpu *c = mycpu();
   int index, i;
   int cpu_id = cpuid();
@@ -511,18 +487,18 @@ scheduler(void)
 
     // 3.1.5.4
     first_link_loc = cpus_lists + cpu_id;
-    index = *first_link_loc;
+    index = cpus_lists[cpu_id];
     //printf("scheduler: index = %d, cpu_id = %d\n", index, cpu_id); // TODO
-    if(index != -1){ // CPU's RUNNABLE list is empty
+    if(index != -1){ // CPU's RUNNABLE list isn't empty
       i = index;
       do {
         p = proc + index;
         acquire(&p->lock);
         if(remove_link(first_link_loc, index)){
-          printf("scheduler: remove_link: index = %d p->pid = %d\n", index, p->pid);
-          p->state = RUNNING;
+          cas(&p->state, RUNNABLE, RUNNING);
           c->proc = p;
           swtch(&c->context, &p->context);
+          add_link(first_link_loc, index, cpu_id);
           c->proc = 0;
         }
         release(&p->lock);
@@ -530,23 +506,6 @@ scheduler(void)
       } while(!cas(&index, i, *first_link_loc) && index != -1);
         // <first_link_loc> had changed in <remove_link>
     }
-    
-    // for(p = proc; p < &proc[NPROC]; p++) {
-    //   acquire(&p->lock);
-    //   if(p->state == RUNNABLE) {
-    //     // Switch to chosen process.  It is the process's job
-    //     // to release its lock and then reacquire it
-    //     // before jumping back to us.
-    //     p->state = RUNNING;
-    //     c->proc = p;
-    //     swtch(&c->context, &p->context);
-
-    //     // Process is done running for now.
-    //     // It should have changed its p->state before coming back.
-    //     c->proc = 0;
-    //   }
-    //   release(&p->lock);
-    // }
   }
 }
 
@@ -616,6 +575,7 @@ void
 sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
+  int temp;
   
   // Must acquire p->lock in order to
   // change p->state and then call sched.
@@ -624,16 +584,16 @@ sleep(void *chan, struct spinlock *lk)
   // (wakeup locks p->lock),
   // so it's okay to release lk.
 
-  acquire(&p->lock);  //DOC: sleeplock1
+  acquire(&p->lock);
   release(lk);
 
-  // Go to sleep.
   p->chan = chan;
-  p->state = SLEEPING;
-  // Task 3.1.5.7
-  remove_link((cpus_lists + cpuid()), p->index);
+  remove_link(&(cpus_lists[p->cpu_num]), p->index);
+  temp = p->state;
+  cas(&p->state, temp, SLEEPING);
   add_link(&sleeping_list, p->index, -1);
 
+  // Go to sleep.
   sched();
 
   // Tidy up.
@@ -653,33 +613,26 @@ wakeup(void *chan)
   struct proc *p;
   int index = sleeping_list;
   int old;
-  if(index == -1){
+  if(index == -1){ // No sleeping processes
     return;
   }
 
   do{
     p = (proc + index);
-    if (p != myproc()){
+    if(p != myproc()){
       acquire(&(p->lock));
-      if (p->chan == chan){
-        remove_link(&sleeping_list, p->index);
-        p->state = RUNNABLE;
-        add_link((cpus_lists + p->cpu_num), p->index, p->cpu_num);
+      if (p->chan == chan){ // p is sleeping on <chan>
+        printf("wakeup: p->chan = chan, p->pid = %d\n", p->pid); // TODO
+        remove_link(&sleeping_list, index);
+        p->chan = 0;
+        if(!cas(&p->state, SLEEPING, RUNNABLE)){
+          add_link(&(cpus_lists[p->cpu_num]), index, p->cpu_num);
+        }
       }
       release(&p->lock);
     }
     old = index;
-  }  while(!cas(&index, old, p->next_proc) && index != -1) ;
-    
-  // for(p = proc; p < &proc[NPROC]; p++) {
-  //   if(p != myproc()){
-  //     acquire(&p->lock);
-  //     if(p->state == SLEEPING && p->chan == chan) {
-  //       p->state = RUNNABLE;
-  //     }
-  //     release(&p->lock);
-  //   }
-  // }
+  } while(!cas(&index, old, sleeping_list) && index != -1) ;
 }
 
 // Kill the process with the given pid.
@@ -781,7 +734,7 @@ add_link(int *first_link, int new_proc_index, int cpu_num){
   // Empty list
   if(!cas(first_link, -1, new_proc_index)){ // Set the pointer to the new first link index
     cpu = (proc + new_proc_index)->cpu_num;
-    if(cpu_num){ // CPU's RUNNABLE list
+    if(cpu_num > 0){ // CPU's RUNNABLE list
       cas(&((proc + new_proc_index)->cpu_num), cpu, cpu_num);
     }
     curr_link = (proc + new_proc_index)->next_proc;
@@ -797,7 +750,7 @@ add_link(int *first_link, int new_proc_index, int cpu_num){
 
     if (!cas(&((proc + curr_link)->next_proc), -1, new_proc_index)){ // Set last link <next_proc> to <new_proc_index>
        cpu = (proc + new_proc_index)->cpu_num;
-      if(cpu_num){ // CPU's RUNNABLE list
+      if(cpu_num > 0){ // CPU's RUNNABLE list
         cas(&((proc + new_proc_index)->cpu_num), cpu, cpu_num);
       } 
       curr_link = (proc + new_proc_index)->next_proc;
@@ -820,8 +773,9 @@ remove_link(int *first_link, int proc_to_remove_index){
     return -1;
   }
 
-  if(*first_link == proc_to_remove_index){ // Only one link in list
-    return !(cas(first_link, curr_link, -1));
+  if(*first_link == proc_to_remove_index){ // Remove first link
+    next_link = (proc + proc_to_remove_index)->next_proc; // Can be -1
+    return !(cas(first_link, curr_link, next_link));
   }
 
   do {

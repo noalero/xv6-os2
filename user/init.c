@@ -37,9 +37,11 @@ main(void)
     }
 
     for(;;){
+      printf("init.c: begining of for(;;) pid = %d\n", pid); // TODO
       // this call to wait() returns if the shell exits,
       // or if a parentless process exits.
       wpid = wait((int *) 0);
+      printf("init.c: main: after wait pid = %d\n", pid); // TODO
       if(wpid == pid){
         // the shell exited; restart it.
         break;
@@ -49,6 +51,7 @@ main(void)
       } else {
         // it was a parentless process; do nothing.
       }
+      printf("init.c: end of for(;;)\n"); // TODO
     }
   }
 }
