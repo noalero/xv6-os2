@@ -133,16 +133,22 @@ allocpid() { // Changed as required
 static struct proc*
 allocproc(void)
 {
-  // Task 3.1.5.11
   struct proc *p;
-  int index = unused_list;
-  if (index == -1){ return 0;} // No free entry in <proc[]> array
+  int next_entry = unused_list;
+  if(unused_list == -1){ // No free entry
+    return 0;
+  }
 
-  p = proc + index;
-  acquire(&p->lock);
+  if(remove_link(&unused_list, unused_list)){
+    p = proc + next_entry;
+    acquire(&p->lock);
+    goto found;
+  }
+  return 0;
+
+found:
   p->pid = allocpid();
   p->state = USED;
-  remove_link(&unused_list, index);
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -257,8 +263,8 @@ void
 userinit(void)
 {
   struct proc *p;
+
   p = allocproc();
-  if(p == 0){ return;}
   initproc = p;
   
   // allocate one user page and copy init's instructions
@@ -272,9 +278,10 @@ userinit(void)
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
+  add_link(&cpus_lists[0], p->index, 0);
 
-  cas(&p->state, USED, RUNNABLE);
-  add_link(&cpus_lists[0], p->index, 0); // Task 3.1.5.9
+  p->state = RUNNABLE;
+
   release(&p->lock);
 }
 
@@ -303,7 +310,7 @@ growproc(int n)
 int
 fork(void)
 {
-  int i, j, pid;
+  int i, pid;
   struct proc *np;
   struct proc *p = myproc();
 
@@ -311,7 +318,6 @@ fork(void)
   if((np = allocproc()) == 0){
     return -1;
   }
-  // holding np->lock
 
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
@@ -334,24 +340,20 @@ fork(void)
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
+
   pid = np->pid;
-  np->cpu_num = p->cpu_num;
-  for(i = 0; i < NPROC; i++){
-    if((proc + i)-> pid == pid){
-      do{
-        j = np->index;
-      } while(cas(&(np->index), j, i));
-      break;
-    }
-  }
+
   release(&np->lock);
 
   acquire(&wait_lock);
   np->parent = p;
+  add_link(&(cpus_lists[p->cpu_num]), np->index, p->cpu_num);
+  // Changes <np->cpu_num> and <np->next_proc>  
   release(&wait_lock);
 
-  add_link((cpus_lists + np->cpu_num), np->index, np->cpu_num); // 3.1.5.3 Add new process to the parent's CPU's RUNNABLE list
-  cas(&np->state, USED, RUNNABLE);
+  acquire(&np->lock);
+  np->state = RUNNABLE;
+  release(&np->lock);
 
   return pid;
 }
@@ -488,7 +490,6 @@ scheduler(void)
     // 3.1.5.4
     first_link_loc = cpus_lists + cpu_id;
     index = cpus_lists[cpu_id];
-    //printf("scheduler: index = %d, cpu_id = %d\n", index, cpu_id); // TODO
     if(index != -1){ // CPU's RUNNABLE list isn't empty
       i = index;
       do {
@@ -622,7 +623,6 @@ wakeup(void *chan)
     if(p != myproc()){
       acquire(&(p->lock));
       if (p->chan == chan){ // p is sleeping on <chan>
-        printf("wakeup: p->chan = chan, p->pid = %d\n", p->pid); // TODO
         remove_link(&sleeping_list, index);
         p->chan = 0;
         if(!cas(&p->state, SLEEPING, RUNNABLE)){
@@ -632,7 +632,7 @@ wakeup(void *chan)
       release(&p->lock);
     }
     old = index;
-  } while(!cas(&index, old, sleeping_list) && index != -1) ;
+  } while(!cas(&index, old, (proc + index)->next_proc) && index != -1) ;
 }
 
 // Kill the process with the given pid.
@@ -718,48 +718,41 @@ procdump(void)
   }
 }
 
+
 int
 add_link(int *first_link, int new_proc_index, int cpu_num){
-  /*If the list is a CPU's RUNNABLE list, <first_link> is a pointer to <cpus_lists[cpu id]>*/
-  /*If the list is a global variable, <first_link> is a pointer to <state_list>, <cpu_num> is -1*/
+  int next_index = *first_link;
+  int cpu_index;
+  int curr_index;
+
+  if(cpu_num >= 0){ // Add link to CPU's list
+    do{
+      cpu_index = (proc + new_proc_index)->cpu_num;
+    } while(cas(&((proc + new_proc_index)->cpu_num), cpu_index, cpu_num));
+  }
   
-  int curr_link;
-  int next_link;
-  int cpu;
-
-  if (new_proc_index < 0 || new_proc_index > NPROC){ // Imposible index
-    return -1;
+  if(next_index == -1){ // Empty list
+    do{
+      curr_index = next_index;
+    } while(cas(first_link, curr_index, new_proc_index));
   }
 
-  // Empty list
-  if(!cas(first_link, -1, new_proc_index)){ // Set the pointer to the new first link index
-    cpu = (proc + new_proc_index)->cpu_num;
-    if(cpu_num > 0){ // CPU's RUNNABLE list
-      cas(&((proc + new_proc_index)->cpu_num), cpu, cpu_num);
-    }
-    curr_link = (proc + new_proc_index)->next_proc;
-    return !cas(&((proc + new_proc_index)->next_proc), curr_link, -1); // Set last link <next_proc> to -1
-  }
   else{
-    // Find the last link
-    curr_link = *first_link; // Will hold the index in <proc[]> array of the current link
-    do {
-      next_link = curr_link;
-    } while (((proc + next_link)->next_proc >= 0) && !cas(&curr_link, next_link, (proc + next_link)->next_proc)) ;
-    // <curr_link> holds the last link
-
-    if (!cas(&((proc + curr_link)->next_proc), -1, new_proc_index)){ // Set last link <next_proc> to <new_proc_index>
-       cpu = (proc + new_proc_index)->cpu_num;
-      if(cpu_num > 0){ // CPU's RUNNABLE list
-        cas(&((proc + new_proc_index)->cpu_num), cpu, cpu_num);
-      } 
-      curr_link = (proc + new_proc_index)->next_proc;
-      return !cas(&((proc + new_proc_index)->next_proc), curr_link, -1); // Set last link <next_proc> to -1
-    }
-    return -1;
+    do{ // Find last link
+      curr_index = next_index;
+    } while (!cas(&next_index, curr_index, (proc + curr_index)->next_proc)
+             && next_index != -1);
+    // <curr_index> holds the index of the last link
+    do{ // add new link to the end of the list
+      next_index = (proc + curr_index)->next_proc;
+    } while(cas(&((proc + curr_index)->next_proc), next_index, new_proc_index));
   }
+  
+  do{ // update <new_proc_index -> next_proc> to -1
+    curr_index = (proc + new_proc_index)->next_proc;
+  } while(cas(&((proc + new_proc_index)->next_proc), curr_index, -1));
+  return 1;
 }
-
 
 int
 remove_link(int *first_link, int proc_to_remove_index){
@@ -768,9 +761,8 @@ remove_link(int *first_link, int proc_to_remove_index){
   int prev_link;
   int next_link;
 
-  // TODO: Check if return value of a list that doesn't contain <pid_to_remove> should be 0 / -1
   if (*first_link == -1) { // Empty list
-    return -1;
+    return 0;
   }
 
   if(*first_link == proc_to_remove_index){ // Remove first link
