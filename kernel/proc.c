@@ -144,7 +144,6 @@ allocproc(void)
     acquire(&p->lock);
     goto found;
   }
-  release(&p->lock);
   return 0;
 
 found:
@@ -493,6 +492,7 @@ scheduler(void)
     index = cpus_lists[cpu_id];
     if(index != -1){ // CPU's RUNNABLE list isn't empty
       p = proc + index;
+      acquire(&p->lock);
       if(remove_link(first_link_loc, index)){
         if(!cas(&p->state, RUNNABLE, RUNNING)){
           c->proc = p;
@@ -501,6 +501,7 @@ scheduler(void)
           c->proc = 0;
         }
       }
+      release(&p->lock);
     }
   }
 }
