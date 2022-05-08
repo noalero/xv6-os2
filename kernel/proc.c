@@ -139,7 +139,7 @@ allocproc(void)
     return 0;
   }
 
-  if(remove_link(&unused_list, unused_list)){
+  if(remove_link(&unused_list, unused_list) == 1){
     p = proc + next_entry;
     acquire(&p->lock);
     goto found;
@@ -493,7 +493,7 @@ scheduler(void)
     if(index != -1){ // CPU's RUNNABLE list isn't empty
       p = proc + index;
       acquire(&p->lock);
-      if(remove_link(first_link_loc, index)){
+      if(remove_link(first_link_loc, index) == 1){
         if(!cas(&p->state, RUNNABLE, RUNNING)){
           c->proc = p;
           swtch(&c->context, &p->context);
@@ -585,21 +585,22 @@ sleep(void *chan, struct spinlock *lk)
   release(lk);
 
   p->chan = chan;
-  remove_link(&(cpus_lists[p->cpu_num]), p->index);
-  do{
-    temp = p->state;
-  } while (cas(&p->state, temp, SLEEPING)) ;
-  add_link(&sleeping_list, p->index, -1);
+  if (remove_link(&(cpus_lists[p->cpu_num]), p->index) == 2){
+    do{
+      temp = p->state;
+    } while (cas(&p->state, temp, SLEEPING)) ;
+    add_link(&sleeping_list, p->index, -1);
 
-  // Go to sleep.
-  sched();
+    // Go to sleep.
+    sched();
 
-  // Tidy up.
-  p->chan = 0;
+    // Tidy up.
+    p->chan = 0;
 
-  // Reacquire original lock.
-  release(&p->lock);
-  acquire(lk);
+    // Reacquire original lock.
+    release(&p->lock);
+    acquire(lk);
+    }
 }
 
 // Wake up all processes sleeping on chan.
@@ -620,10 +621,11 @@ wakeup(void *chan)
     if(p != myproc()){
       acquire(&(p->lock));
       if (p->chan == chan){ // p is sleeping on <chan>
-        remove_link(&sleeping_list, index);
-        p->chan = 0;
-        if(!cas(&p->state, SLEEPING, RUNNABLE)){
-          add_link(&(cpus_lists[p->cpu_num]), index, p->cpu_num);
+        if (remove_link(&sleeping_list, index) == 1){
+          p->chan = 0;
+          if(!cas(&p->state, SLEEPING, RUNNABLE)){
+            add_link(&(cpus_lists[p->cpu_num]), index, p->cpu_num);
+          }
         }
       }
       release(&p->lock);
