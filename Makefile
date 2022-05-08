@@ -63,6 +63,7 @@ CFLAGS += -mcmodel=medany
 CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAGS += -I.
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
+CFLAGS += -D$(BLNCFLG)
 
 # Disable PIE when possible (for Ubuntu 16.10 toolchain)
 ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]no-pie'),)
@@ -70,6 +71,10 @@ CFLAGS += -fno-pie -no-pie
 endif
 ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]nopie'),)
 CFLAGS += -fno-pie -nopie
+endif
+
+ifndef BLNCFLG
+BLNCFLG := DEFAULT
 endif
 
 LDFLAGS = -z max-page-size=4096

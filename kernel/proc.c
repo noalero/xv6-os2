@@ -45,6 +45,7 @@ int zombie_list;
 int unused_list;
 
 int cpus_lists[NCPU] = { [ 0 ... (NCPU - 1) ] = -1}; // List initialised to -1
+uint64 counters[NCPU] = { [ 0 ... (NCPU - 1) ] = 0}; 
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -263,6 +264,7 @@ void
 userinit(void)
 {
   struct proc *p;
+  int curr_cpu_count;
 
   p = allocproc();
   initproc = p;
@@ -279,6 +281,11 @@ userinit(void)
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
   add_link(&cpus_lists[0], p->index, 0);
+  #ifdef BLNCFLG ON
+    do{
+      curr_cpu_count = counters[0];
+    } while(cas(counters, curr_cpu_count, curr_cpu_count + 1)) ;
+  #endif
 
   p->state = RUNNABLE;
 
@@ -310,7 +317,7 @@ growproc(int n)
 int
 fork(void)
 {
-  int i, pid;
+  int i, pid, min, cpu_index;
   struct proc *np;
   struct proc *p = myproc();
 
@@ -347,9 +354,33 @@ fork(void)
 
   acquire(&wait_lock);
   np->parent = p;
-  add_link(&(cpus_lists[p->cpu_num]), np->index, p->cpu_num);
-  // Changes <np->cpu_num> and <np->next_proc>  
   release(&wait_lock);
+
+  #ifdef BLNCFLG ON
+    // Part 4 flag is on
+    // Choose CPU with lowest counter value
+    min = __UINT64_MAX__;
+    cpu_index = -1;
+    for(i = 0; i < NCPU; i++){
+      if(counters[i] < min){
+        min = counters[i];
+        cpu_index = i;
+      }
+    }
+    // <cpu_index> now holds the index of the CPU with lowest count value
+    do{
+      i = np->cpu_num;
+    } while(cas(&(np->cpu_num), i, cpu_index)) ;
+    add_link(&(cpus_lists[cpu_index]), np->index, cpu_index);    
+  #endif
+
+  #ifdef BLNCFLG OFF
+    // Part 4 flag is off
+    add_link(&(cpus_lists[p->cpu_num]), np->index, p->cpu_num);
+    // Changes <np->cpu_num> and <np->next_proc> 
+  #endif
+ 
+
 
   acquire(&np->lock);
   np->state = RUNNABLE;
@@ -613,7 +644,7 @@ wakeup(void *chan)
   // Task 3.1.5.8
   struct proc *p;
   int index = sleeping_list;
-  int old;
+  int old, min, cpu_index, i;
   if(index == -1){ // No sleeping processes
     return;
   }
@@ -626,7 +657,31 @@ wakeup(void *chan)
         if (remove_link(&sleeping_list, index) == 1){
           p->chan = 0;
           if(!cas(&p->state, SLEEPING, RUNNABLE)){
-            add_link(&(cpus_lists[p->cpu_num]), index, p->cpu_num);
+
+            #ifdef BLNCFLG ON
+                // Part 4 flag is on
+                // Choose CPU with lowest counter value
+                min = __UINT64_MAX__;
+                cpu_index = -1;
+                for(i = 0; i < NCPU; i++){
+                  if(counters[i] < min){
+                    min = counters[i];
+                    cpu_index = i;
+                  }
+                }
+                // <cpu_index> now holds the index of the CPU with lowest count value
+                do{
+                  i = np->cpu_num;
+                } while(cas(&(np->cpu_num), i, cpu_index)) ;
+                add_link(&(cpus_lists[cpu_index]), np->index, cpu_index);    
+              #endif
+
+              #ifdef BLNCFLG OFF
+                // Part 4 flag is off
+                add_link(&(cpus_lists[p->cpu_num]), index, p->cpu_num);
+                // Changes <np->cpu_num> and <np->next_proc> 
+              #endif
+
           }
         }
       }
@@ -784,29 +839,6 @@ remove_link(int *first_link, int proc_to_remove_index){
   return !cas(&((proc + prev_link)->next_proc), curr_link, next_link); // Set the next link <prev_link> "points" at to <next_link>
 }
 
-// For debugging
-int
-print_list(int loop_size){
-  struct  proc *p;
-  int list = -1;
-  
-  for (p = proc; p < &proc[NPROC]; p++){
-      add_link(&list, p->pid, -1);
-      //printf("link added: %d\n", p->pid);
-  }
-  int link = list;
-  int count = 0;
-  int temp;
-  do {
-    temp = link;
-    count++;
-    //printf("link index: %d\n", temp);
-  }
-  while (!cas(&link, temp, (proc + link)->next_proc)) ; 
-  printf("list size: %d\n", count);
-  return 0;
-}
-
 // 3.1.5.1
 int
 set_cpu(int cpu_num){
@@ -826,4 +858,9 @@ get_cpu(void){
   intr_off();
   cpu_num = cpuid();
   return cpu_num;
+}
+
+int
+cpu_process_count(int cpu_num){
+  return counters[cpu_num];
 }

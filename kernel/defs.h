@@ -108,7 +108,7 @@ int             add_link(int *first_link, int new_link_index, int cpu_num);
 int             remove_link(int *first_link, int proc_to_remove_index);
 int             set_cpu(int cpu_num);
 int             get_cpu(void);
-int             print_list(int loop_size); // For debugging
+int             cpu_process_count(int cpu_num);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

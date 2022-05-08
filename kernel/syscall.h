@@ -20,7 +20,7 @@
 #define SYS_link   19
 #define SYS_mkdir  20
 #define SYS_close  21
-#define SYS_print_list  22 // For debugging
-#define SYS_set_cpu 23
-#define SYS_get_cpu 24
+#define SYS_set_cpu 22
+#define SYS_get_cpu 23
+#define SYS_cpu_process_count 24
 
