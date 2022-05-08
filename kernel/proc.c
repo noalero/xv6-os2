@@ -139,7 +139,7 @@ allocproc(void)
     return 0;
   }
 
-  if(remove_link(&unused_list, unused_list)){
+  if(remove_link(&unused_list, unused_list) == 1){
     p = proc + next_entry;
     acquire(&p->lock);
     goto found;
@@ -478,7 +478,7 @@ scheduler(void)
 {
   struct proc *p = 0;
   struct cpu *c = mycpu();
-  int index, i;
+  int index;
   int cpu_id = cpuid();
   int *first_link_loc;
 
@@ -491,21 +491,19 @@ scheduler(void)
     first_link_loc = cpus_lists + cpu_id;
     index = cpus_lists[cpu_id];
     if(index != -1){ // CPU's RUNNABLE list isn't empty
-      i = index;
-      do {
-        p = proc + index;
-        acquire(&p->lock);
-        if(remove_link(first_link_loc, index)){
-          cas(&p->state, RUNNABLE, RUNNING);
+      p = proc + index;
+      acquire(&p->lock);
+      if(remove_link(first_link_loc, index) == 1){
+        cas(&p->state, RUNNABLE, RUNNING);
           c->proc = p;
           swtch(&c->context, &p->context);
-          add_link(first_link_loc, index, cpu_id);
+          if(cas(&p->state, ZOMBIE, ZOMBIE)){
+            add_link(first_link_loc, index, cpu_id);
+          }
           c->proc = 0;
         }
-        release(&p->lock);
-        i = index;
-      } while(!cas(&index, i, *first_link_loc) && index != -1);
-        // <first_link_loc> had changed in <remove_link>
+      release(&p->lock);
+      // <first_link_loc> had changed in <remove_link>
     }
   }
 }
@@ -589,9 +587,11 @@ sleep(void *chan, struct spinlock *lk)
   release(lk);
 
   p->chan = chan;
-  remove_link(&(cpus_lists[p->cpu_num]), p->index);
-  temp = p->state;
-  cas(&p->state, temp, SLEEPING);
+  if (remove_link(&(cpus_lists[p->cpu_num]), p->index) == 2){
+    do{
+      temp = p->state;
+    } while(cas(&p->state, temp, SLEEPING));
+  }
   add_link(&sleeping_list, p->index, -1);
 
   // Go to sleep.
@@ -623,11 +623,12 @@ wakeup(void *chan)
     if(p != myproc()){
       acquire(&(p->lock));
       if (p->chan == chan){ // p is sleeping on <chan>
-        remove_link(&sleeping_list, index);
-        p->chan = 0;
-        if(!cas(&p->state, SLEEPING, RUNNABLE)){
-          add_link(&(cpus_lists[p->cpu_num]), index, p->cpu_num);
-        }
+        if(remove_link(&sleeping_list, index)){
+           p->chan = 0;
+          if(!cas(&p->state, SLEEPING, RUNNABLE)){
+            add_link(&(cpus_lists[p->cpu_num]), index, p->cpu_num);
+          }
+        }        
       }
       release(&p->lock);
     }
@@ -762,7 +763,7 @@ remove_link(int *first_link, int proc_to_remove_index){
   int next_link;
 
   if (*first_link == -1) { // Empty list
-    return 0;
+    return 2;
   }
 
   if(*first_link == proc_to_remove_index){ // Remove first link
@@ -772,9 +773,13 @@ remove_link(int *first_link, int proc_to_remove_index){
 
   do {
     prev_link = curr_link;
-  } while(!cas(&curr_link, prev_link, (proc + prev_link)->next_proc) && curr_link != proc_to_remove_index) ;
+  } while(!cas(&curr_link, prev_link, (proc + prev_link)->next_proc) && curr_link != proc_to_remove_index
+          && curr_link != -1) ;
   // <prev_link> holds the index of the link "pointing" at <pid_to_remove>
   // <curr_link> holds the index of <pid_to_remove>
+  if (curr_link == -1){ // <proc_to_remove> isn't in the list
+    return 2;
+  }
   next_link = (proc + curr_link)->next_proc; // Holds the location of the link <pid_to_remove> "points" at.
   return !cas(&((proc + prev_link)->next_proc), curr_link, next_link); // Set the next link <prev_link> "points" at to <next_link>
 }
@@ -806,12 +811,12 @@ print_list(int loop_size){
 int
 set_cpu(int cpu_num){
   struct  proc *p = myproc();
-  remove_link((cpus_lists + p->cpu_num), p->index);
-  // TODO: find out how to yield the cpu
-  add_link((cpus_lists + cpu_num), p->index, cpu_num);
-
-  
-  return -1;
+  int curr_cpu;
+  do{
+    curr_cpu = p->cpu_num;
+  } while(cas(&((proc + p->index)->cpu_num), curr_cpu, cpu_num)) ;
+  yield();
+  return p->cpu_num;
 }
 
 // 3.1.5.2
