@@ -281,11 +281,11 @@ userinit(void)
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
   add_link(&cpus_lists[0], p->index, 0);
-  #ifdef BLNCFLG ON
-    do{
-      curr_cpu_count = counters[0];
-    } while(cas(counters, curr_cpu_count, curr_cpu_count + 1)) ;
-  #endif
+  // #ifdef BLNCFLG ON
+  //   do{
+  //     curr_cpu_count = counters[0];
+  //   } while(cas(counters, curr_cpu_count, curr_cpu_count + 1)) ;
+  // #endif
 
   p->state = RUNNABLE;
 
@@ -317,7 +317,7 @@ growproc(int n)
 int
 fork(void)
 {
-  int i, pid, min, cpu_index;
+  int i, pid/*, min, cpu_index*/;
   struct proc *np;
   struct proc *p = myproc();
 
@@ -356,29 +356,30 @@ fork(void)
   np->parent = p;
   release(&wait_lock);
 
-  #ifdef BLNCFLG ON
-    // Part 4 flag is on
-    // Choose CPU with lowest counter value
-    min = __UINT64_MAX__;
-    cpu_index = -1;
-    for(i = 0; i < NCPU; i++){
-      if(counters[i] < min){
-        min = counters[i];
-        cpu_index = i;
-      }
-    }
-    // <cpu_index> now holds the index of the CPU with lowest count value
-    do{
-      i = np->cpu_num;
-    } while(cas(&(np->cpu_num), i, cpu_index)) ;
-    add_link(&(cpus_lists[cpu_index]), np->index, cpu_index);    
-  #endif
+  // #ifdef BLNCFLG ON
+  //   // Part 4 flag is on
+  //   // Choose CPU with lowest counter value
+  //   min = __UINT64_MAX__;
+  //   cpu_index = -1;
+  //   for(i = 0; i < NCPU; i++){
+  //     if(counters[i] < min){
+  //       min = counters[i];
+  //       cpu_index = i;
+  //     }
+  //   }
+  //   // <cpu_index> now holds the index of the CPU with lowest count value
+  //   do{
+  //     i = np->cpu_num;
+  //   } while(cas(&(np->cpu_num), i, cpu_index)) ;
+  //   add_link(&(cpus_lists[cpu_index]), np->index, cpu_index);    
+  // #endif
 
-  #ifdef BLNCFLG OFF
-    // Part 4 flag is off
-    add_link(&(cpus_lists[p->cpu_num]), np->index, p->cpu_num);
-    // Changes <np->cpu_num> and <np->next_proc> 
-  #endif
+  // #ifdef BLNCFLG OFF
+  //   // Part 4 flag is off
+  //   add_link(&(cpus_lists[p->cpu_num]), np->index, p->cpu_num);
+  //   // Changes <np->cpu_num> and <np->next_proc> 
+  // #endif
+  add_link(&(cpus_lists[p->cpu_num]), np->index, p->cpu_num);
  
 
 
@@ -644,7 +645,7 @@ wakeup(void *chan)
   // Task 3.1.5.8
   struct proc *p;
   int index = sleeping_list;
-  int old, min, cpu_index, i;
+  int old/*, min, cpu_index, i*/;
   if(index == -1){ // No sleeping processes
     return;
   }
@@ -658,29 +659,30 @@ wakeup(void *chan)
           p->chan = 0;
           if(!cas(&p->state, SLEEPING, RUNNABLE)){
 
-            #ifdef BLNCFLG ON
-                // Part 4 flag is on
-                // Choose CPU with lowest counter value
-                min = __UINT64_MAX__;
-                cpu_index = -1;
-                for(i = 0; i < NCPU; i++){
-                  if(counters[i] < min){
-                    min = counters[i];
-                    cpu_index = i;
-                  }
-                }
-                // <cpu_index> now holds the index of the CPU with lowest count value
-                do{
-                  i = np->cpu_num;
-                } while(cas(&(np->cpu_num), i, cpu_index)) ;
-                add_link(&(cpus_lists[cpu_index]), np->index, cpu_index);    
-              #endif
+            // #ifdef BLNCFLG ON
+            //     // Part 4 flag is on
+            //     // Choose CPU with lowest counter value
+            //     min = __UINT64_MAX__;
+            //     cpu_index = -1;
+            //     for(i = 0; i < NCPU; i++){
+            //       if(counters[i] < min){
+            //         min = counters[i];
+            //         cpu_index = i;
+            //       }
+            //     }
+            //     // <cpu_index> now holds the index of the CPU with lowest count value
+            //     do{
+            //       i = np->cpu_num;
+            //     } while(cas(&(np->cpu_num), i, cpu_index)) ;
+            //     add_link(&(cpus_lists[cpu_index]), np->index, cpu_index);    
+            //   #endif
 
-              #ifdef BLNCFLG OFF
-                // Part 4 flag is off
-                add_link(&(cpus_lists[p->cpu_num]), index, p->cpu_num);
-                // Changes <np->cpu_num> and <np->next_proc> 
-              #endif
+            //   #ifdef BLNCFLG OFF
+            //     // Part 4 flag is off
+            //     add_link(&(cpus_lists[p->cpu_num]), index, p->cpu_num);
+            //     // Changes <np->cpu_num> and <np->next_proc> 
+            //   #endif
+            add_link(&(cpus_lists[p->cpu_num]), index, p->cpu_num);
 
           }
         }
