@@ -23,7 +23,9 @@ int getpid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
-int print_list(int); // For debugging
+int set_cpu(int);
+int get_cpu(void);
+int cpu_process_count(int);
 
 // ulib.c
 int stat(const char*, struct stat*);

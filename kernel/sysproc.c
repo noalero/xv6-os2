@@ -114,3 +114,12 @@ sys_get_cpu(void){
   get_cpu();
   return -1;
 }
+
+uint64
+sys_cpu_process_count(void){
+  int cpu_index;
+  if(argint(0, &cpu_index)){
+    return cpu_process_count(cpu_index);
+  }
+  return -1;
+}
