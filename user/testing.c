@@ -29,7 +29,6 @@ void part2(int loop_size){
 }
 
 void linked_list (int loop_size){
-    print_list(loop_size);
 }
     
 

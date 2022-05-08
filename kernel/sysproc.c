@@ -96,13 +96,6 @@ sys_uptime(void)
   return xticks;
 }
 
-// For debugging
-uint64
-sys_print_list(void){
-  print_list(8);
-  return 0;
-}
-
 uint64
 sys_set_cpu(void){
   set_cpu(-1);

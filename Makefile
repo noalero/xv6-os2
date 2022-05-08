@@ -74,7 +74,7 @@ CFLAGS += -fno-pie -nopie
 endif
 
 ifndef BLNCFLG
-BLNCFLG := DEFAULT
+BLNCFLG := OFF
 endif
 
 LDFLAGS = -z max-page-size=4096

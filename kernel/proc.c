@@ -264,7 +264,7 @@ void
 userinit(void)
 {
   struct proc *p;
-  int curr_cpu_count;
+  /*int curr_cpu_count;*/
 
   p = allocproc();
   initproc = p;
