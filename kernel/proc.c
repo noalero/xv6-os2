@@ -780,8 +780,7 @@ procdump(void)
 int
 add_link(int *first_link, int new_proc_index, int cpu_num){
   int next_index = *first_link;
-  int cpu_index;
-  int curr_index;
+  int cpu_index, curr_index;
 
   if(cpu_num >= 0){ // Add link to CPU's list
     do{
@@ -789,23 +788,20 @@ add_link(int *first_link, int new_proc_index, int cpu_num){
     } while(cas(&((proc + new_proc_index)->cpu_num), cpu_index, cpu_num));
   }
   
-  if(next_index == -1){ // Empty list
+  if(*first_link == -1){ // Empty list
     do{
-      curr_index = next_index;
-    } while(cas(first_link, curr_index, new_proc_index));
+      curr_index = *first_link;
+    } while(*first_link == -1 && cas(first_link, curr_index, new_proc_index));
+    if(*first_link == new_proc_index) goto new_next;
   }
 
-  else{
-    do{ // Find last link
-      curr_index = next_index;
-    } while (!cas(&next_index, curr_index, (proc + curr_index)->next_proc)
-             && next_index != -1);
-    // <curr_index> holds the index of the last link
-    do{ // add new link to the end of the list
-      next_index = (proc + curr_index)->next_proc;
-    } while(cas(&((proc + curr_index)->next_proc), next_index, new_proc_index));
-  }
-  
+  curr_index = *first_link;
+  do{ // add new link to the end of the list
+    next_index = curr_index;
+  } while(cas(&((proc + curr_index)->next_proc), -1, new_proc_index)
+          && !cas(&curr_index, next_index, (proc + curr_index)->next_proc));
+
+new_next:
   do{ // update <new_proc_index -> next_proc> to -1
     curr_index = (proc + new_proc_index)->next_proc;
   } while(cas(&((proc + new_proc_index)->next_proc), curr_index, -1));
@@ -815,30 +811,31 @@ add_link(int *first_link, int new_proc_index, int cpu_num){
 int
 remove_link(int *first_link, int proc_to_remove_index){
 
-  int curr_link = *first_link;
-  int prev_link;
-  int next_link;
+  int curr_link, prev_link, next_link;
 
   if (*first_link == -1) { // Empty list
     return 2;
   }
 
   if(*first_link == proc_to_remove_index){ // Remove first link
-    next_link = (proc + proc_to_remove_index)->next_proc; // Can be -1
-    return !(cas(first_link, curr_link, next_link));
+    do{
+      next_link = (proc + proc_to_remove_index)->next_proc; // Can be -1
+    } while(!cas(first_link, proc_to_remove_index, next_link)) ;
+    if(*first_link == next_link) return 1;
   }
 
+  prev_link = *first_link;
   do {
-    prev_link = curr_link;
-  } while(!cas(&curr_link, prev_link, (proc + prev_link)->next_proc) && curr_link != proc_to_remove_index
-          && curr_link != -1) ;
-  // <prev_link> holds the index of the link "pointing" at <pid_to_remove>
-  // <curr_link> holds the index of <pid_to_remove>
-  if (curr_link == -1){ // <proc_to_remove> isn't in the list
+    curr_link = prev_link;
+  } while(cas(&((proc + prev_link)->next_proc), proc_to_remove_index, (proc + proc_to_remove_index)->next_proc) 
+          && !cas(&prev_link, curr_link, (proc + prev_link)->next_proc) 
+          && prev_link != -1) ;
+
+  if (prev_link == -1){ // <proc_to_remove> isn't in the list
     return 2;
   }
-  next_link = (proc + curr_link)->next_proc; // Holds the location of the link <pid_to_remove> "points" at.
-  return !cas(&((proc + prev_link)->next_proc), curr_link, next_link); // Set the next link <prev_link> "points" at to <next_link>
+
+  return 1;
 }
 
 // 3.1.5.1
