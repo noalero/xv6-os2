@@ -779,6 +779,15 @@ procdump(void)
 
 int
 add_link(int *first_link, int new_proc_index, int cpu_num){
+  // <first_link> holds the address of the list:
+  //  # If the list is implemented as a global variable (<sleeping_list>, <zombie_list>, <unused_list>)
+  //    <first_link> = &<state_list>.
+  //  # If the list is implemented as an index in <cpus_lists> array (some CPU's RUNNABLE list)
+  //    <first_link> = <cpus_lists> + <cpu_id>.
+  // <new_proc_index> is the index in <proc> array of the process that should be removed.
+  // <cpu_num> is the index in <cpus> array of the CPU to which list the new process should be added.
+  //  # If <cpu_num> == -1, the new link is to be inserted to some <state_list>.
+
   int next_index = *first_link;
   int cpu_index, curr_index;
 
@@ -786,6 +795,8 @@ add_link(int *first_link, int new_proc_index, int cpu_num){
     do{
       cpu_index = (proc + new_proc_index)->cpu_num;
     } while(cas(&((proc + new_proc_index)->cpu_num), cpu_index, cpu_num));
+      // Update the new process <cpu_num> field to hold the CPU to which list 
+      // the process is to be added.
   }
   
   if(*first_link == -1){ // Empty list
@@ -793,23 +804,34 @@ add_link(int *first_link, int new_proc_index, int cpu_num){
       curr_index = *first_link;
     } while(*first_link == -1 && cas(first_link, curr_index, new_proc_index));
     if(*first_link == new_proc_index) goto new_next;
+    // Else: *<first_link> != -1, and the new process should be sdded to a non-empty list.
   }
 
   curr_index = *first_link;
   do{ // add new link to the end of the list
     next_index = curr_index;
   } while(cas(&((proc + curr_index)->next_proc), -1, new_proc_index)
+          /* If cas returns true, <curr_index> isn't the last link*/
           && !cas(&curr_index, next_index, (proc + curr_index)->next_proc));
 
+// Perhaps this part is unnecessary since <proc->next_proc> is initialized to -1,
+// and when removing a link from a list <proc->next_proc> is updated to -1
 new_next:
   do{ // update <new_proc_index -> next_proc> to -1
     curr_index = (proc + new_proc_index)->next_proc;
   } while(cas(&((proc + new_proc_index)->next_proc), curr_index, -1));
+  
   return 1;
 }
 
 int
 remove_link(int *first_link, int proc_to_remove_index){
+  // <first_link> holds the address of the list:
+  //  # If the list is implemented as a global variable (<sleeping_list>, <zombie_list>, <unused_list>)
+  //    <first_link> = &<state_list>.
+  //  # If the list is implemented as an index in <cpus_lists> array (some CPU's RUNNABLE list)
+  //    <first_link> = <cpus_lists> + <cpu_id>.
+  // <proc_to_remove_index> is the index in <proc> array of the process that should be removed.
 
   int curr_link, prev_link, next_link;
 
@@ -821,13 +843,16 @@ remove_link(int *first_link, int proc_to_remove_index){
     do{
       next_link = (proc + proc_to_remove_index)->next_proc; // Can be -1
     } while(!cas(first_link, proc_to_remove_index, next_link)) ;
-    if(*first_link == next_link) return 1;
+      // Once *<first_link> holdes <next_index>, the while loop exits.
+    if(*first_link == next_link) goto clean;
   }
 
   prev_link = *first_link;
   do {
     curr_link = prev_link;
   } while(cas(&((proc + prev_link)->next_proc), proc_to_remove_index, (proc + proc_to_remove_index)->next_proc) 
+          /* If cas returns true (<(proc + prev_link)->next_proc> != <proc_to_remove_index>), 
+            update <prev_link> to hold the next link.*/
           && !cas(&prev_link, curr_link, (proc + prev_link)->next_proc) 
           && prev_link != -1) ;
 
@@ -835,6 +860,10 @@ remove_link(int *first_link, int proc_to_remove_index){
     return 2;
   }
 
+clean:
+  do{
+    next_link = (proc + proc_to_remove_index)->next_proc;
+  } while(cas(&((proc + proc_to_remove_index)->next_proc), next_link, -1)) ;
   return 1;
 }
 
