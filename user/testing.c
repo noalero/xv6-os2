@@ -10,33 +10,52 @@
 
 
 
-void part2(int loop_size){
+void
+part2(int loop_size){
     int pid = loop_size + 2;
     if(pid > 0){
         pid++;
     }
-    //printf("  %d  \n", 22);
-    // for (int i = 0; i < loop_size; i++){
-    //     pid = fork();
-    //     printf("  %d  \n", pid);
-    //     if (pid == 0){ // Child
-    //         printf("CHild's pid: %d\n", pid);
-    //     }
-    //     else { // Parent
-    //         printf("Parent's pid: %d\n", pid);
-    //     }
-    // }
 }
 
-void linked_list (int loop_size){
+void
+linked_list (int loop_size){}
+
+void
+part3 (int loop_size){
+    int pid = -3;
+    for(int i = 0; i < loop_size; i++){
+        pid = fork();
+
+        if(pid < 0){
+            printf("part3: fork faild\n");
+            exit(1);
+        }
+
+        if(pid == 0 ){ // Child
+            printf("Child's process\n");
+            exit(0);
+        }
+
+        if(pid > 0){ // Parent
+            printf("before wait\n");
+            wait(0);
+            printf("Parent's process pid = %d\n", pid);
+        }
+    }    
 }
     
 
-int main(int argc, char* argv[]){
-    int loop_size = 2;
-    //part2(loop_size);
-    fork();
-    fork();
-    linked_list(loop_size);
-    return 0;
+int
+main(int argc, char* argv[]){
+    int loop_size = 1;
+    if(argc > 0) printf("%s:\n", argv[0]);
+    printf("Number of arguments passed : %d\n", argc);
+    if(argc == 2) {
+        loop_size = atoi(argv[1]);
+        printf("argv = %d\n", loop_size);
+    }
+    part3(loop_size);
+    printf("After part3\n");
+    return 1;
 }

@@ -32,9 +32,11 @@ extern uint64 cas(volatile void *addr, int expected, int newval);
   Process: Each process will have a field: <next_proc> that will hold the index (in proc[] array) of the next process of it's current list.
            (The value of the field will be between (0 - NPROC), or -1 if this process is the last one in the list).
            In addition, each process will have a field <index> that will hold the index in <proc[]> array of the process.
-  CPU: There will be an array <cpus_list> of size <NCPU> that will hold the index of the firt process in the runnable list of the coresponding cpu.
+  CPU: There will be an int array: <cpus_lists> of size <NCPU>
+       that will hold the index of the firt process in the RUNNABLE list of the coresponding cpu.
+       Meaning <cpus_lists[i]> will hold the index (in <proc> array) of the first process of the RUNNABLE list of <cpus[i]> (0 <= i < NCPU).
        If the list is empty <cpus_lists> will be set to -1.
-  States lists: Three global variables: <sleeping_list>, <zombie_list>, <unused_list> 
+  States lists: Three global variables: int <sleeping_list>, <zombie_list>, <unused_list> 
                 Each variable will hold the index (in proc[] array) of the first process/ entry in the respective list.
                 If the list is empty, the value of the global variable will be -1.
   ## All of the above fields and global variables will be initialized to -1.
@@ -82,6 +84,7 @@ procinit(void)
     p->index = (p - proc);
     p->next_proc = -1;
     p->cpu_num = -1;
+    p->flag = 0;
     add_link(&unused_list, p->index, -1);
   }
 }
@@ -150,6 +153,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  // p->flag = 0;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -201,6 +205,7 @@ freeproc(struct proc *p)
   p->cpu_num = -1;
   p->next_proc = -1;
   p->state = UNUSED;
+  p->flag = 0;
   
 }
 
@@ -265,7 +270,6 @@ userinit(void)
 {
   struct proc *p;
   /*int curr_cpu_count;*/
-
   p = allocproc();
   initproc = p;
   
@@ -273,11 +277,11 @@ userinit(void)
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
-
+  
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
-
+  
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
   add_link(&cpus_lists[0], p->index, 0);
@@ -325,7 +329,6 @@ fork(void)
   if((np = allocproc()) == 0){
     return -1;
   }
-
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
@@ -380,7 +383,6 @@ fork(void)
   //   // Changes <np->cpu_num> and <np->next_proc> 
   // #endif
   add_link(&(cpus_lists[p->cpu_num]), np->index, p->cpu_num);
- 
 
 
   acquire(&np->lock);
@@ -788,8 +790,7 @@ add_link(int *first_link, int new_proc_index, int cpu_num){
   // <cpu_num> is the index in <cpus> array of the CPU to which list the new process should be added.
   //  # If <cpu_num> == -1, the new link is to be inserted to some <state_list>.
 
-  int next_index = *first_link;
-  int cpu_index, curr_index;
+  int next_index, cpu_index, curr_index;
 
   if(cpu_num >= 0){ // Add link to CPU's list
     do{
@@ -798,7 +799,8 @@ add_link(int *first_link, int new_proc_index, int cpu_num){
       // Update the new process <cpu_num> field to hold the CPU to which list 
       // the process is to be added.
   }
-  
+
+start_add:
   if(*first_link == -1){ // Empty list
     do{
       curr_index = *first_link;
@@ -810,6 +812,7 @@ add_link(int *first_link, int new_proc_index, int cpu_num){
   curr_index = *first_link;
   do{ // add new link to the end of the list
     next_index = curr_index;
+    if(curr_index != -1 && (proc + curr_index)->flag == 1) goto start_add; // <curr_index> was logically deleted
   } while(cas(&((proc + curr_index)->next_proc), -1, new_proc_index)
           /* If cas returns true, <curr_index> isn't the last link*/
           && !cas(&curr_index, next_index, (proc + curr_index)->next_proc));
@@ -833,23 +836,34 @@ remove_link(int *first_link, int proc_to_remove_index){
   //    <first_link> = <cpus_lists> + <cpu_id>.
   // <proc_to_remove_index> is the index in <proc> array of the process that should be removed.
 
-  int curr_link, prev_link, next_link;
+  int curr_link, prev_link, next_link, flag;
 
   if (*first_link == -1) { // Empty list
     return 2;
   }
 
-  if(*first_link == proc_to_remove_index){ // Remove first link
+  if((proc + proc_to_remove_index)->flag == 1) return 2; // Someone else deleted <proc_to_remove>.
+
+  do{ // Logically delete <proc_to_remove>.
+    flag = (proc + proc_to_remove_index)->flag;
+  } while(cas(&((proc + proc_to_remove_index)->flag), flag, 1)) ;
+
+start_remove:
+  if(*first_link == proc_to_remove_index){ // Remove first link.
     do{
-      next_link = (proc + proc_to_remove_index)->next_proc; // Can be -1
+      next_link = (proc + proc_to_remove_index)->next_proc;
     } while(!cas(first_link, proc_to_remove_index, next_link)) ;
-      // Once *<first_link> holdes <next_index>, the while loop exits.
-    if(*first_link == next_link) goto clean;
+      // Once *<first_link> holdes <n(proc + proc_to_remove_index)->next_proc>, the while loop exits.
+    if(*first_link == (proc + proc_to_remove_index)->next_proc){
+      prev_link = 1;
+      goto clean;
+    } 
   }
 
   prev_link = *first_link;
   do {
     curr_link = prev_link;
+    if(prev_link != proc_to_remove_index && (proc + prev_link)-> flag == 1) goto start_remove; // <prev_link> was logically deleted.
   } while(cas(&((proc + prev_link)->next_proc), proc_to_remove_index, (proc + proc_to_remove_index)->next_proc) 
           /* If cas returns true (<(proc + prev_link)->next_proc> != <proc_to_remove_index>), 
             update <prev_link> to hold the next link.*/
@@ -857,14 +871,20 @@ remove_link(int *first_link, int proc_to_remove_index){
           && prev_link != -1) ;
 
   if (prev_link == -1){ // <proc_to_remove> isn't in the list
-    return 2;
+    prev_link = 2;
+    goto clean;
   }
+
+  prev_link = 1;
 
 clean:
   do{
     next_link = (proc + proc_to_remove_index)->next_proc;
   } while(cas(&((proc + proc_to_remove_index)->next_proc), next_link, -1)) ;
-  return 1;
+  do{
+    flag = (proc + proc_to_remove_index)->flag;
+  } while(cas(&((proc + proc_to_remove_index)->flag), flag, 0)) ;
+  return prev_link;
 }
 
 // 3.1.5.1

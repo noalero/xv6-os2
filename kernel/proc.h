@@ -95,6 +95,7 @@ struct proc {
   int index;                   // Process index in <proc[]> array
   int next_proc;               // The index (in proc[] array) of the next process of it's current list.
   int cpu_num;                 // Number of the CPU whose RUNNABLE list contains this process
+  int flag;                    // If non-zero this node is being delited
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
