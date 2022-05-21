@@ -106,6 +106,8 @@ int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
 int             add_link(int *first_link, int new_link_index, int cpu_num);
 int             remove_link(int *first_link, int proc_to_remove_index);
+int             add_link_double_locking(int *first_link, int new_proc_index, int cpu_num, int lock_index);
+int             remove_link_double_locking(int *first_link, int proc_to_remove_index, int lock_index);
 int             set_cpu(int cpu_num);
 int             get_cpu(void);
 int             cpu_process_count(int cpu_num);

@@ -63,6 +63,7 @@ CFLAGS += -mcmodel=medany
 CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAGS += -I.
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
+CFLAGS += -Dnumcpus=$(CPUS)
 CFLAGS += -D$(BLNCFLG)
 
 # Disable PIE when possible (for Ubuntu 16.10 toolchain)
@@ -74,7 +75,7 @@ CFLAGS += -fno-pie -nopie
 endif
 
 ifndef BLNCFLG
-BLNCFLG := OFF
+BLNCFLG := DEFAULT
 endif
 
 LDFLAGS = -z max-page-size=4096
@@ -161,7 +162,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
 	then echo "-gdb tcp::$(GDBPORT)"; \
 	else echo "-s -p $(GDBPORT)"; fi)
 ifndef CPUS
-CPUS := 2
+CPUS := 8
 endif
 
 QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic

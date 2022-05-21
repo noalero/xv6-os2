@@ -45,9 +45,14 @@ extern uint64 cas(volatile void *addr, int expected, int newval);
 int sleeping_list;
 int zombie_list;
 int unused_list;
+int flag; // 1 when flag is ON, -1 when flag is OFF
 
 int cpus_lists[NCPU] = { [ 0 ... (NCPU - 1) ] = -1}; // List initialised to -1
-uint64 counters[NCPU] = { [ 0 ... (NCPU - 1) ] = 0}; 
+uint64 counters[NCPU] = { [ 0 ... (NCPU - 1) ] = 0};
+
+/******************* double locking *******************/
+struct spinlock cpus_lock[NCPU + 3]; // Indexes <NCPU> - <NCPU + 2> for <sleeping_list>, <zombie_list>, <unused> locks.
+int double_locking;
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -69,6 +74,14 @@ proc_mapstacks(pagetable_t kpgtbl) {
 void
 procinit(void)
 {
+  /******************* double locking *******************/
+  double_locking = 0; // 1
+  if(double_locking == 1){
+    for(int i = 0 ; i < NCPU + 3; i++){
+      initlock(&cpus_lock[i], "list_lock");
+    }
+  }
+
   struct proc *p;
   unused_list = -1;
   sleeping_list = -1;
@@ -80,6 +93,7 @@ procinit(void)
   // Task 3.1.5.10
   for(p = proc; p < &proc[NPROC]; p++) {
     initlock(&p->lock, "proc");
+    if(double_locking == 1) initlock(&p->lock, "link");
     p->kstack = KSTACK((int) (p - proc));
     p->index = (p - proc);
     p->next_proc = -1;
@@ -87,6 +101,19 @@ procinit(void)
     p->flag = 0;
     add_link(&unused_list, p->index, -1);
   }
+
+  #ifdef ON
+    flag = 1;
+  #endif
+
+  #ifdef OFF
+    flag = -1;
+  #endif
+
+  #ifdef DEFAULT
+    flag = -1;
+  #endif
+
 }
 
 // Must be called with interrupts disabled,
@@ -135,8 +162,7 @@ allocpid() { // Changed as required
 // and return with p->lock held.
 // If there are no free procs, or a memory allocation fails, return 0.
 static struct proc*
-allocproc(void)
-{
+allocproc(void){
   struct proc *p;
   int next_entry = unused_list;
   if(unused_list == -1){ // No free entry
@@ -184,8 +210,7 @@ found:
 // including user pages.
 // p->lock must be held.
 static void
-freeproc(struct proc *p)
-{
+freeproc(struct proc *p){
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
@@ -206,7 +231,6 @@ freeproc(struct proc *p)
   p->next_proc = -1;
   p->state = UNUSED;
   p->flag = 0;
-  
 }
 
 // Create a user page table for a given process,
@@ -266,10 +290,9 @@ uchar initcode[] = {
 
 // Set up first user process.
 void
-userinit(void)
-{
+userinit(void){
   struct proc *p;
-  /*int curr_cpu_count;*/
+  int curr_cpu_count;
   p = allocproc();
   initproc = p;
   
@@ -285,14 +308,13 @@ userinit(void)
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
   add_link(&cpus_lists[0], p->index, 0);
-  // #ifdef BLNCFLG ON
-  //   do{
-  //     curr_cpu_count = counters[0];
-  //   } while(cas(counters, curr_cpu_count, curr_cpu_count + 1)) ;
-  // #endif
+  if(flag > 0){
+    do{
+      curr_cpu_count = counters[0]; // Should be 0
+    } while(cas(&(counters[0]), curr_cpu_count, curr_cpu_count + 1)) ;
+  }
 
   p->state = RUNNABLE;
-
   release(&p->lock);
 }
 
@@ -319,9 +341,9 @@ growproc(int n)
 // Create a new process, copying the parent.
 // Sets up child kernel stack to return as if from fork() system call.
 int
-fork(void)
-{
-  int i, pid/*, min, cpu_index*/;
+fork(void){
+  int i, j, pid, cpu_index;
+  uint64 min;
   struct proc *np;
   struct proc *p = myproc();
 
@@ -359,35 +381,32 @@ fork(void)
   np->parent = p;
   release(&wait_lock);
 
-  // #ifdef BLNCFLG ON
-  //   // Part 4 flag is on
-  //   // Choose CPU with lowest counter value
-  //   min = __UINT64_MAX__;
-  //   cpu_index = -1;
-  //   for(i = 0; i < NCPU; i++){
-  //     if(counters[i] < min){
-  //       min = counters[i];
-  //       cpu_index = i;
-  //     }
-  //   }
-  //   // <cpu_index> now holds the index of the CPU with lowest count value
-  //   do{
-  //     i = np->cpu_num;
-  //   } while(cas(&(np->cpu_num), i, cpu_index)) ;
-  //   add_link(&(cpus_lists[cpu_index]), np->index, cpu_index);    
-  // #endif
-
-  // #ifdef BLNCFLG OFF
-  //   // Part 4 flag is off
-  //   add_link(&(cpus_lists[p->cpu_num]), np->index, p->cpu_num);
-  //   // Changes <np->cpu_num> and <np->next_proc> 
-  // #endif
-  add_link(&(cpus_lists[p->cpu_num]), np->index, p->cpu_num);
-
-
   acquire(&np->lock);
   np->state = RUNNABLE;
   release(&np->lock);
+
+  if(flag > 0){
+    // Part 4 flag is on
+    // Choose CPU with lowest counter value
+    min = __UINT64_MAX__;
+    cpu_index = -1;
+    for(i = 0; i < CPUS; i++){
+      if(counters[i] < min){
+        min = counters[i];
+        cpu_index = i;
+      }
+    }
+    // <cpu_index> now holds the index of the CPU with lowest count value
+    add_link(&(cpus_lists[cpu_index]), np->index, cpu_index); 
+    do{ // Update <counter> value
+      j = counters[cpu_index];
+    } while(cas(counters + cpu_index, j, j + 1)) ;
+  }
+  else{
+    // Part 4 flag is off
+    add_link(&(cpus_lists[p->cpu_num]), np->index, p->cpu_num);
+    // Changes <np->cpu_num> and <np->next_proc> 
+  }
 
   return pid;
 }
@@ -411,8 +430,7 @@ reparent(struct proc *p)
 // An exited process remains in the zombie state
 // until its parent calls wait().
 void
-exit(int status)
-{
+exit(int status){
   struct proc *p = myproc();
 
   if(p == initproc)
@@ -443,6 +461,7 @@ exit(int status)
   acquire(&p->lock);
 
   p->xstate = status;
+  remove_link(&(cpus_lists[p->cpu_num]), p->index);
   p->state = ZOMBIE;
   add_link(&zombie_list, p->index, -1); // Task 3.1.5.5
 
@@ -456,8 +475,7 @@ exit(int status)
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
 int
-wait(uint64 addr)
-{
+wait(uint64 addr){
   struct proc *np;
   int havekids, pid;
   struct proc *p = myproc();
@@ -508,8 +526,7 @@ wait(uint64 addr)
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
 void
-scheduler(void)
-{
+scheduler(void){
   struct proc *p = 0;
   struct cpu *c = mycpu();
   int index;
@@ -522,7 +539,7 @@ scheduler(void)
     intr_on();
 
     // 3.1.5.4
-    first_link_loc = cpus_lists + cpu_id;
+    first_link_loc = &cpus_lists[cpu_id];
     index = cpus_lists[cpu_id];
     if(index != -1){ // CPU's RUNNABLE list isn't empty
       p = proc + index;
@@ -532,12 +549,38 @@ scheduler(void)
           c->proc = p;
           swtch(&c->context, &p->context);
           if(cas(&p->state, ZOMBIE, ZOMBIE)){
+            p->state = RUNNABLE;
             add_link(first_link_loc, index, cpu_id);
           }
           c->proc = 0;
         }
       release(&p->lock);
       // <first_link_loc> had changed in <remove_link>
+    }
+    // 4.3
+    else if(flag > 0){
+      for(int i = 0; i < CPUS; i++){
+        if(cpus_lists[i] != -1){ // <cpus_lists[i]> isn't empty
+          p = proc + cpus_lists[i];
+          acquire(&p->lock);
+          if(remove_link((&cpus_lists[i]), p->index) == 1){
+            do{ // Increment count
+              index = counters[cpu_id];
+            } while(cas(&counters[cpu_id], index, index + 1)) ;
+            cas(&p->state, RUNNABLE, RUNNING);
+            cas(&(p->cpu_num), i, cpu_id);
+            c->proc = p;
+            swtch(&c->context, &p->context);
+            if(cas(&p->state, ZOMBIE, ZOMBIE)){
+              p->state = RUNNABLE;
+              add_link(first_link_loc, p->index, cpu_id);
+            }
+            c->proc = 0;
+          }
+          release(&p->lock);
+          break;
+        }
+      }
     }
   }
 }
@@ -571,8 +614,7 @@ sched(void)
 
 // Give up the CPU for one scheduling round.
 void
-yield(void)
-{
+yield(void){
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
@@ -605,10 +647,9 @@ forkret(void)
 // Atomically release lock and sleep on chan.
 // Reacquires lock when awakened.
 void
-sleep(void *chan, struct spinlock *lk)
-{
+sleep(void *chan, struct spinlock *lk){
   struct proc *p = myproc();
-  int temp;
+  int temp = 0;
   
   // Must acquire p->lock in order to
   // change p->state and then call sched.
@@ -617,8 +658,7 @@ sleep(void *chan, struct spinlock *lk)
   // (wakeup locks p->lock),
   // so it's okay to release lk.
 
-  acquire(&p->lock);
-  release(lk);
+
 
   p->chan = chan;
   if (remove_link(&(cpus_lists[p->cpu_num]), p->index) == 1){
@@ -626,28 +666,35 @@ sleep(void *chan, struct spinlock *lk)
       temp = p->state;
     } while(cas(&p->state, temp, SLEEPING));
     add_link(&sleeping_list, p->index, -1);
+    temp = 1;
+  }
 
+  acquire(&p->lock);
+  release(lk);
+
+  if(temp == 1){
     // Go to sleep.
     sched();
   }
-    // Tidy up.
-    p->chan = 0;
+  
+  // Tidy up.
+  p->chan = 0;
 
-    // Reacquire original lock.
-    release(&p->lock);
-    acquire(lk);
+  // Reacquire original lock.
+  release(&p->lock);
+  acquire(lk);
 
 }
 
 // Wake up all processes sleeping on chan.
 // Must be called without any p->lock.
 void
-wakeup(void *chan)
-{
+wakeup(void *chan){
   // Task 3.1.5.8
   struct proc *p;
   int index = sleeping_list;
-  int old/*, min, cpu_index, i*/;
+  int old, cpu_index, i, j;
+  uint64 min;
   if(index == -1){ // No sleeping processes
     return;
   }
@@ -660,32 +707,29 @@ wakeup(void *chan)
         if (remove_link(&sleeping_list, index) == 1){
           p->chan = 0;
           if(!cas(&p->state, SLEEPING, RUNNABLE)){
-
-            // #ifdef BLNCFLG ON
-            //     // Part 4 flag is on
-            //     // Choose CPU with lowest counter value
-            //     min = __UINT64_MAX__;
-            //     cpu_index = -1;
-            //     for(i = 0; i < NCPU; i++){
-            //       if(counters[i] < min){
-            //         min = counters[i];
-            //         cpu_index = i;
-            //       }
-            //     }
-            //     // <cpu_index> now holds the index of the CPU with lowest count value
-            //     do{
-            //       i = np->cpu_num;
-            //     } while(cas(&(np->cpu_num), i, cpu_index)) ;
-            //     add_link(&(cpus_lists[cpu_index]), np->index, cpu_index);    
-            //   #endif
-
-            //   #ifdef BLNCFLG OFF
-            //     // Part 4 flag is off
-            //     add_link(&(cpus_lists[p->cpu_num]), index, p->cpu_num);
-            //     // Changes <np->cpu_num> and <np->next_proc> 
-            //   #endif
-            add_link(&(cpus_lists[p->cpu_num]), index, p->cpu_num);
-
+           
+            if(flag > 0){
+              // Part 4 flag is on
+              // Choose CPU with lowest counter value
+              min = __UINT64_MAX__;
+              cpu_index = -1;
+              for(i = 0; i < CPUS; i++){
+                if(counters[i] < min){
+                  min = counters[i];
+                  cpu_index = i;
+                }
+              }
+              // <cpu_index> now holds the index of the CPU with lowest count value
+              add_link(&(cpus_lists[cpu_index]), p->index, cpu_index);  
+              do{ // Update <counter> value
+                j = counters[cpu_index];
+              } while(cas(counters + cpu_index, j, j + 1)) ;  
+            }
+            else{
+              // Part 4 flag is off
+              add_link(&(cpus_lists[p->cpu_num]), index, p->cpu_num);
+              // Changes <np->cpu_num> and <np->next_proc> 
+            }
           }
         }
       }
@@ -699,8 +743,7 @@ wakeup(void *chan)
 // The victim won't exit until it tries to return
 // to user space (see usertrap() in trap.c).
 int
-kill(int pid)
-{
+kill(int pid){
   struct proc *p;
 
   for(p = proc; p < &proc[NPROC]; p++){
@@ -709,7 +752,9 @@ kill(int pid)
       p->killed = 1;
       if(p->state == SLEEPING){
         // Wake process from sleep().
+        remove_link(&sleeping_list, p->index);
         p->state = RUNNABLE;
+        add_link(&cpus_lists[p->cpu_num], p->index, p->cpu_num);
       }
       release(&p->lock);
       return 0;
@@ -790,6 +835,14 @@ add_link(int *first_link, int new_proc_index, int cpu_num){
   // <cpu_num> is the index in <cpus> array of the CPU to which list the new process should be added.
   //  # If <cpu_num> == -1, the new link is to be inserted to some <state_list>.
 
+  /********************** double locking *************************/
+  if(double_locking == 1){
+    if(cpu_num >= 0) return add_link_double_locking(first_link, new_proc_index, cpu_num, cpu_num);
+    if(first_link == &sleeping_list) return add_link_double_locking(first_link, new_proc_index, cpu_num, NCPU);
+    if(first_link == &zombie_list) return add_link_double_locking(first_link, new_proc_index, cpu_num, NCPU + 1);
+    if(first_link == &unused_list) return add_link_double_locking(first_link, new_proc_index, cpu_num, NCPU + 2);
+  }
+
   int next_index, cpu_index, curr_index;
 
   if(cpu_num >= 0){ // Add link to CPU's list
@@ -835,6 +888,14 @@ remove_link(int *first_link, int proc_to_remove_index){
   //  # If the list is implemented as an index in <cpus_lists> array (some CPU's RUNNABLE list)
   //    <first_link> = <cpus_lists> + <cpu_id>.
   // <proc_to_remove_index> is the index in <proc> array of the process that should be removed.
+
+  /********************** double locking *************************/
+  if(double_locking == 1){
+    if(first_link == &sleeping_list) return remove_link_double_locking(first_link, proc_to_remove_index, NCPU);
+    if(first_link == &zombie_list) return remove_link_double_locking(first_link, proc_to_remove_index, NCPU + 1);
+    if(first_link == &unused_list) return remove_link_double_locking(first_link, proc_to_remove_index, NCPU + 2);
+    return remove_link_double_locking(first_link, proc_to_remove_index, (proc + proc_to_remove_index)->cpu_num);
+  }
 
   int curr_link, prev_link, next_link, flag;
 
@@ -885,6 +946,87 @@ clean:
     flag = (proc + proc_to_remove_index)->flag;
   } while(cas(&((proc + proc_to_remove_index)->flag), flag, 0)) ;
   return prev_link;
+}
+
+int
+add_link_double_locking(int *first_link, int new_proc_index, int cpu_num, int lock_index){
+  int pred;
+  struct spinlock *slock;
+  slock = &(cpus_lock[lock_index]);
+  // Locking the head of the list, checking the case of an empty list, then releasing this lock.
+  acquire(slock);
+  pred = *first_link;
+  if(pred == -1){ // Empty list
+    *first_link = new_proc_index;
+    goto release;
+  }
+  release(slock);
+
+  slock = &((proc + pred)->link_lock);
+  acquire(slock);
+  while(pred != -1){ // Could be <while(1)>.
+    if((proc + pred)->next_proc == -1){
+      (proc + pred)->next_proc = new_proc_index;
+      goto release; // <pred> is the last link
+    } 
+    pred = (proc + pred)->next_proc;
+    release(slock);
+    slock = &((proc + pred)->link_lock);
+    acquire(slock);
+  }
+
+release:
+  release(slock);
+  if(cpu_num >= 0){
+    (proc + new_proc_index)->cpu_num = cpu_num;
+  }
+  return 1;
+}
+
+int
+remove_link_double_locking(int *first_link, int proc_to_remove_index, int lock_index){
+  int pred, curr;
+  struct spinlock *slock;
+
+  if (*first_link == -1) return 2; // Empty list
+
+  acquire(&(cpus_lock[lock_index]));
+  pred = *first_link;
+  acquire(&(proc + pred)->link_lock);
+
+  if(pred == proc_to_remove_index){ // Remove first link
+    *first_link = (proc + pred)->next_proc;
+    (proc + pred)->next_proc = -1;
+    release(&(proc + pred)->link_lock);
+    release(&(cpus_lock[lock_index]));
+    return 1;  
+  }
+  release(&(cpus_lock[lock_index]));
+  // Holding <pred>'s <link_lock>
+
+  curr = (proc + pred)->next_proc;
+  slock = &((proc + curr)->link_lock);
+  acquire(slock);
+  while(curr != -1) {
+    if(curr == proc_to_remove_index){
+      (proc + pred)->next_proc = (proc + curr)->next_proc;
+      (proc + curr)->next_proc = -1;
+      release(slock);
+      release(&(proc + pred)->link_lock);
+      return 1;
+    }
+    release(&(proc + pred)->link_lock);
+    pred = curr;
+    curr = (proc + curr)->next_proc;
+    if(curr != -1){
+      slock = &((proc + curr)->link_lock);
+      acquire(slock);
+    }
+  }
+  // If we got here, <proc_to_remove_index> isn't in the list
+  release(slock);
+  return 2;
+  
 }
 
 // 3.1.5.1
